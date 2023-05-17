@@ -118,9 +118,10 @@ func (c completedConfig) New() (*WardleServer, error) {
 	//v1beta1storage["flunders"] = wardleregistry.RESTInPeace(flunderstorage.NewREST(Scheme, c.GenericConfig.RESTOptionsGetter))
 	apiGroupInfo.VersionedResourcesStorageMap["v1beta1"] = v1beta1storage
 
-	if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
-		return nil, err
-	}
+	// Install custom API group and add it to the list of registered groups
+	//if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
+	//	return nil, err
+	//}
 
 	return s, nil
 }
