@@ -19,7 +19,6 @@ package server
 import (
 	"fmt"
 	"io"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"net"
@@ -29,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/endpoints/openapi"
 	"k8s.io/apiserver/pkg/features"
 	genericapiserver "k8s.io/apiserver/pkg/server"
@@ -37,10 +35,8 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 	"k8s.io/sample-apiserver/pkg/admission/plugin/banflunder"
-	"k8s.io/sample-apiserver/pkg/admission/wardleinitializer"
 	"k8s.io/sample-apiserver/pkg/apis/wardle/v1alpha1"
 	"k8s.io/sample-apiserver/pkg/apiserver"
-	clientset "k8s.io/sample-apiserver/pkg/generated/clientset/versioned"
 	informers "k8s.io/sample-apiserver/pkg/generated/informers/externalversions"
 	sampleopenapi "k8s.io/sample-apiserver/pkg/generated/openapi"
 	netutils "k8s.io/utils/net"
@@ -129,15 +125,15 @@ func (o *WardleServerOptions) Config() (*apiserver.Config, error) {
 
 	//o.RecommendedOptions.Etcd.StorageConfig.Paging = utilfeature.DefaultFeatureGate.Enabled(features.APIListChunking)
 
-	o.RecommendedOptions.ExtraAdmissionInitializers = func(c *genericapiserver.RecommendedConfig) ([]admission.PluginInitializer, error) {
-		client, err := clientset.NewForConfig(c.LoopbackClientConfig)
-		if err != nil {
-			return nil, err
-		}
-		informerFactory := informers.NewSharedInformerFactory(client, c.LoopbackClientConfig.Timeout)
-		o.SharedInformerFactory = informerFactory
-		return []admission.PluginInitializer{wardleinitializer.New(informerFactory)}, nil
-	}
+	//o.RecommendedOptions.ExtraAdmissionInitializers = func(c *genericapiserver.RecommendedConfig) ([]admission.PluginInitializer, error) {
+	//	client, err := clientset.NewForConfig(c.LoopbackClientConfig)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	informerFactory := informers.NewSharedInformerFactory(client, c.LoopbackClientConfig.Timeout)
+	//	o.SharedInformerFactory = informerFactory
+	//	return []admission.PluginInitializer{wardleinitializer.New(informerFactory)}, nil
+	//}
 
 	serverConfig := genericapiserver.NewRecommendedConfig(apiserver.Codecs)
 
@@ -175,8 +171,8 @@ func (o WardleServerOptions) RunWardleServer(stopCh <-chan struct{}) error {
 	}
 
 	server.GenericAPIServer.AddPostStartHookOrDie("start-sample-server-informers", func(context genericapiserver.PostStartHookContext) error {
-		config.GenericConfig.SharedInformerFactory.Start(context.StopCh)
-		o.SharedInformerFactory.Start(context.StopCh)
+		//config.GenericConfig.SharedInformerFactory.Start(context.StopCh)
+		//o.SharedInformerFactory.Start(context.StopCh)
 		return nil
 	})
 
@@ -199,37 +195,37 @@ func applyTo(o *genericoptions.RecommendedOptions, config *genericapiserver.Reco
 	if err := o.SecureServing.ApplyTo(&config.Config.SecureServing, &config.Config.LoopbackClientConfig); err != nil {
 		return err
 	}
-	if err := o.Authentication.ApplyTo(&config.Config.Authentication, config.SecureServing, config.OpenAPIConfig); err != nil {
-		return err
-	}
-	if err := o.Authorization.ApplyTo(&config.Config.Authorization); err != nil {
-		return err
-	}
+	//if err := o.Authentication.ApplyTo(&config.Config.Authentication, config.SecureServing, config.OpenAPIConfig); err != nil {
+	//	return err
+	//}
+	//if err := o.Authorization.ApplyTo(&config.Config.Authorization); err != nil {
+	//	return err
+	//}
 	if err := o.Audit.ApplyTo(&config.Config); err != nil {
 		return err
 	}
 	if err := o.Features.ApplyTo(&config.Config); err != nil {
 		return err
 	}
-	if err := o.CoreAPI.ApplyTo(config); err != nil {
-		return err
-	}
-	initializers, err := o.ExtraAdmissionInitializers(config)
-	if err != nil {
-		return err
-	}
-	kubeClient, err := kubernetes.NewForConfig(config.ClientConfig)
-	if err != nil {
-		return err
-	}
-	dynamicClient, err := dynamic.NewForConfig(config.ClientConfig)
-	if err != nil {
-		return err
-	}
-	if err := o.Admission.ApplyTo(&config.Config, config.SharedInformerFactory, kubeClient, dynamicClient, o.FeatureGate,
-		initializers...); err != nil {
-		return err
-	}
+	//if err := o.CoreAPI.ApplyTo(config); err != nil {
+	//	return err
+	//}
+	//initializers, err := o.ExtraAdmissionInitializers(config)
+	//if err != nil {
+	//	return err
+	//}
+	//kubeClient, err := kubernetes.NewForConfig(config.ClientConfig)
+	//if err != nil {
+	//	return err
+	//}
+	//dynamicClient, err := dynamic.NewForConfig(config.ClientConfig)
+	//if err != nil {
+	//	return err
+	//}
+	//if err := o.Admission.ApplyTo(&config.Config, config.SharedInformerFactory, nil, nil, o.FeatureGate,
+	//	initializers...); err != nil {
+	//	return err
+	//}
 	if utilfeature.DefaultFeatureGate.Enabled(features.APIPriorityAndFairness) {
 		if config.ClientConfig != nil {
 			if config.MaxRequestsInFlight+config.MaxMutatingRequestsInFlight <= 0 {
@@ -253,12 +249,12 @@ func validate(o *genericoptions.RecommendedOptions) []error {
 	errors := []error{}
 	//errors = append(errors, o.Etcd.Validate()...)
 	errors = append(errors, o.SecureServing.Validate()...)
-	errors = append(errors, o.Authentication.Validate()...)
-	errors = append(errors, o.Authorization.Validate()...)
+	//errors = append(errors, o.Authentication.Validate()...)
+	//errors = append(errors, o.Authorization.Validate()...)
 	errors = append(errors, o.Audit.Validate()...)
 	errors = append(errors, o.Features.Validate()...)
-	errors = append(errors, o.CoreAPI.Validate()...)
-	errors = append(errors, o.Admission.Validate()...)
+	//errors = append(errors, o.CoreAPI.Validate()...)
+	//errors = append(errors, o.Admission.Validate()...)
 	errors = append(errors, o.EgressSelector.Validate()...)
 	errors = append(errors, o.Traces.Validate()...)
 
