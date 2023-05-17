@@ -19,6 +19,9 @@ package server
 import (
 	"fmt"
 	"io"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/klog/v2"
 	"net"
 
 	"github.com/spf13/cobra"
@@ -32,6 +35,7 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 	"k8s.io/sample-apiserver/pkg/admission/plugin/banflunder"
 	"k8s.io/sample-apiserver/pkg/admission/wardleinitializer"
 	"k8s.io/sample-apiserver/pkg/apis/wardle/v1alpha1"
@@ -101,7 +105,7 @@ func NewCommandStartWardleServer(defaults *WardleServerOptions, stopCh <-chan st
 // Validate validates WardleServerOptions
 func (o WardleServerOptions) Validate(args []string) error {
 	errors := []error{}
-	errors = append(errors, o.RecommendedOptions.Validate()...)
+	errors = append(errors, validate(o.RecommendedOptions)...)
 	return utilerrors.NewAggregate(errors)
 }
 
@@ -123,7 +127,7 @@ func (o *WardleServerOptions) Config() (*apiserver.Config, error) {
 		return nil, fmt.Errorf("error creating self-signed certificates: %v", err)
 	}
 
-	o.RecommendedOptions.Etcd.StorageConfig.Paging = utilfeature.DefaultFeatureGate.Enabled(features.APIListChunking)
+	//o.RecommendedOptions.Etcd.StorageConfig.Paging = utilfeature.DefaultFeatureGate.Enabled(features.APIListChunking)
 
 	o.RecommendedOptions.ExtraAdmissionInitializers = func(c *genericapiserver.RecommendedConfig) ([]admission.PluginInitializer, error) {
 		client, err := clientset.NewForConfig(c.LoopbackClientConfig)
@@ -147,7 +151,7 @@ func (o *WardleServerOptions) Config() (*apiserver.Config, error) {
 		serverConfig.OpenAPIV3Config.Info.Version = "0.1"
 	}
 
-	if err := o.RecommendedOptions.ApplyTo(serverConfig); err != nil {
+	if err := applyTo(o.RecommendedOptions, serverConfig); err != nil {
 		return nil, err
 	}
 
@@ -177,4 +181,86 @@ func (o WardleServerOptions) RunWardleServer(stopCh <-chan struct{}) error {
 	})
 
 	return server.GenericAPIServer.PrepareRun().Run(stopCh)
+}
+
+func applyTo(o *genericoptions.RecommendedOptions, config *genericapiserver.RecommendedConfig) error {
+	//if err := o.Etcd.Complete(config.Config.StorageObjectCountTracker, config.Config.DrainedNotify(), config.Config.AddPostStartHook); err != nil {
+	//	return err
+	//}
+	//if err := o.Etcd.ApplyTo(&config.Config); err != nil {
+	//	return err
+	//}
+	if err := o.EgressSelector.ApplyTo(&config.Config); err != nil {
+		return err
+	}
+	if err := o.Traces.ApplyTo(config.Config.EgressSelector, &config.Config); err != nil {
+		return err
+	}
+	if err := o.SecureServing.ApplyTo(&config.Config.SecureServing, &config.Config.LoopbackClientConfig); err != nil {
+		return err
+	}
+	if err := o.Authentication.ApplyTo(&config.Config.Authentication, config.SecureServing, config.OpenAPIConfig); err != nil {
+		return err
+	}
+	if err := o.Authorization.ApplyTo(&config.Config.Authorization); err != nil {
+		return err
+	}
+	if err := o.Audit.ApplyTo(&config.Config); err != nil {
+		return err
+	}
+	if err := o.Features.ApplyTo(&config.Config); err != nil {
+		return err
+	}
+	if err := o.CoreAPI.ApplyTo(config); err != nil {
+		return err
+	}
+	initializers, err := o.ExtraAdmissionInitializers(config)
+	if err != nil {
+		return err
+	}
+	kubeClient, err := kubernetes.NewForConfig(config.ClientConfig)
+	if err != nil {
+		return err
+	}
+	dynamicClient, err := dynamic.NewForConfig(config.ClientConfig)
+	if err != nil {
+		return err
+	}
+	if err := o.Admission.ApplyTo(&config.Config, config.SharedInformerFactory, kubeClient, dynamicClient, o.FeatureGate,
+		initializers...); err != nil {
+		return err
+	}
+	if utilfeature.DefaultFeatureGate.Enabled(features.APIPriorityAndFairness) {
+		if config.ClientConfig != nil {
+			if config.MaxRequestsInFlight+config.MaxMutatingRequestsInFlight <= 0 {
+				return fmt.Errorf("invalid configuration: MaxRequestsInFlight=%d and MaxMutatingRequestsInFlight=%d; they must add up to something positive", config.MaxRequestsInFlight, config.MaxMutatingRequestsInFlight)
+
+			}
+			config.FlowControl = utilflowcontrol.New(
+				config.SharedInformerFactory,
+				kubernetes.NewForConfigOrDie(config.ClientConfig).FlowcontrolV1beta3(),
+				config.MaxRequestsInFlight+config.MaxMutatingRequestsInFlight,
+				config.RequestTimeout/4,
+			)
+		} else {
+			klog.Warningf("Neither kubeconfig is provided nor service-account is mounted, so APIPriorityAndFairness will be disabled")
+		}
+	}
+	return nil
+}
+
+func validate(o *genericoptions.RecommendedOptions) []error {
+	errors := []error{}
+	//errors = append(errors, o.Etcd.Validate()...)
+	errors = append(errors, o.SecureServing.Validate()...)
+	errors = append(errors, o.Authentication.Validate()...)
+	errors = append(errors, o.Authorization.Validate()...)
+	errors = append(errors, o.Audit.Validate()...)
+	errors = append(errors, o.Features.Validate()...)
+	errors = append(errors, o.CoreAPI.Validate()...)
+	errors = append(errors, o.Admission.Validate()...)
+	errors = append(errors, o.EgressSelector.Validate()...)
+	errors = append(errors, o.Traces.Validate()...)
+
+	return errors
 }
