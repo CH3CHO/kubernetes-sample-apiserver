@@ -26,8 +26,8 @@ import (
 
 func main() {
 	stopCh := genericapiserver.SetupSignalHandler()
-	options := server.NewWardleServerOptions(os.Stdout, os.Stderr)
-	cmd := server.NewCommandStartWardleServer(options, stopCh)
+	options := server.NewHigressServerOptions(os.Stdout, os.Stderr)
+	cmd := server.NewCommandStartHigressServer(options, stopCh)
 	code := cli.Run(cmd)
 	os.Exit(code)
 }

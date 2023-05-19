@@ -19,33 +19,22 @@ package server
 import (
 	"fmt"
 	"io"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/klog/v2"
+	"k8s.io/client-go/informers"
 	"net"
 
 	"github.com/spf13/cobra"
 
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/apiserver/pkg/endpoints/openapi"
 	"k8s.io/apiserver/pkg/features"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
-	"k8s.io/sample-apiserver/pkg/admission/plugin/banflunder"
-	"k8s.io/sample-apiserver/pkg/apis/wardle/v1alpha1"
 	"k8s.io/sample-apiserver/pkg/apiserver"
-	informers "k8s.io/sample-apiserver/pkg/generated/informers/externalversions"
-	sampleopenapi "k8s.io/sample-apiserver/pkg/generated/openapi"
 	netutils "k8s.io/utils/net"
 )
 
-const defaultEtcdPathPrefix = "/registry/wardle.example.com"
-
-// WardleServerOptions contains state for master/api server
-type WardleServerOptions struct {
+// HigressServerOptions contains state for master/api server
+type HigressServerOptions struct {
 	RecommendedOptions *genericoptions.RecommendedOptions
 
 	SharedInformerFactory informers.SharedInformerFactory
@@ -55,29 +44,26 @@ type WardleServerOptions struct {
 	AlternateDNS []string
 }
 
-// NewWardleServerOptions returns a new WardleServerOptions
-func NewWardleServerOptions(out, errOut io.Writer) *WardleServerOptions {
-	o := &WardleServerOptions{
+// NewHigressServerOptions returns a new HigressServerOptions
+func NewHigressServerOptions(out, errOut io.Writer) *HigressServerOptions {
+	o := &HigressServerOptions{
 		RecommendedOptions: genericoptions.NewRecommendedOptions(
 			"",
-			//apiserver.Codecs.LegacyCodec(v1alpha1.SchemeGroupVersion),
 			apiserver.Codecs.LegacyCodec(),
 		),
-
 		StdOut: out,
 		StdErr: errOut,
 	}
-	o.RecommendedOptions.Etcd.StorageConfig.EncodeVersioner = runtime.NewMultiGroupVersioner(v1alpha1.SchemeGroupVersion, schema.GroupKind{Group: v1alpha1.GroupName})
 	return o
 }
 
-// NewCommandStartWardleServer provides a CLI handler for 'start master' command
-// with a default WardleServerOptions.
-func NewCommandStartWardleServer(defaults *WardleServerOptions, stopCh <-chan struct{}) *cobra.Command {
+// NewCommandStartHigressServer provides a CLI handler for 'start master' command
+// with a default HigressServerOptions.
+func NewCommandStartHigressServer(defaults *HigressServerOptions, stopCh <-chan struct{}) *cobra.Command {
 	o := *defaults
 	cmd := &cobra.Command{
-		Short: "Launch a wardle API server",
-		Long:  "Launch a wardle API server",
+		Short: "Launch a Higress API server",
+		Long:  "Launch a Higress API server",
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := o.Complete(); err != nil {
 				return err
@@ -85,7 +71,7 @@ func NewCommandStartWardleServer(defaults *WardleServerOptions, stopCh <-chan st
 			if err := o.Validate(args); err != nil {
 				return err
 			}
-			if err := o.RunWardleServer(stopCh); err != nil {
+			if err := o.RunHigressServer(stopCh); err != nil {
 				return err
 			}
 			return nil
@@ -99,53 +85,35 @@ func NewCommandStartWardleServer(defaults *WardleServerOptions, stopCh <-chan st
 	return cmd
 }
 
-// Validate validates WardleServerOptions
-func (o WardleServerOptions) Validate(args []string) error {
+// Validate validates HigressServerOptions
+func (o HigressServerOptions) Validate(args []string) error {
 	errors := []error{}
 	errors = append(errors, validate(o.RecommendedOptions)...)
 	return utilerrors.NewAggregate(errors)
 }
 
 // Complete fills in fields required to have valid data
-func (o *WardleServerOptions) Complete() error {
-	// register admission plugins
-	banflunder.Register(o.RecommendedOptions.Admission.Plugins)
-
-	// add admission plugins to the RecommendedPluginOrder
-	o.RecommendedOptions.Admission.RecommendedPluginOrder = append(o.RecommendedOptions.Admission.RecommendedPluginOrder, "BanFlunder")
-
+func (o *HigressServerOptions) Complete() error {
 	return nil
 }
 
-// Config returns config for the api server given WardleServerOptions
-func (o *WardleServerOptions) Config() (*apiserver.Config, error) {
+// Config returns config for the api server given HigressServerOptions
+func (o *HigressServerOptions) Config() (*apiserver.Config, error) {
 	// TODO have a "real" external address
 	if err := o.RecommendedOptions.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", o.AlternateDNS, []net.IP{netutils.ParseIPSloppy("127.0.0.1")}); err != nil {
 		return nil, fmt.Errorf("error creating self-signed certificates: %v", err)
 	}
 
-	//o.RecommendedOptions.Etcd.StorageConfig.Paging = utilfeature.DefaultFeatureGate.Enabled(features.APIListChunking)
-
-	//o.RecommendedOptions.ExtraAdmissionInitializers = func(c *genericapiserver.RecommendedConfig) ([]admission.PluginInitializer, error) {
-	//	client, err := clientset.NewForConfig(c.LoopbackClientConfig)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	informerFactory := informers.NewSharedInformerFactory(client, c.LoopbackClientConfig.Timeout)
-	//	o.SharedInformerFactory = informerFactory
-	//	return []admission.PluginInitializer{wardleinitializer.New(informerFactory)}, nil
-	//}
-
 	serverConfig := genericapiserver.NewRecommendedConfig(apiserver.Codecs)
 
-	serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
-	serverConfig.OpenAPIConfig.Info.Title = "Wardle"
-	serverConfig.OpenAPIConfig.Info.Version = "0.1"
+	//serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
+	//serverConfig.OpenAPIConfig.Info.Title = "Wardle"
+	//serverConfig.OpenAPIConfig.Info.Version = "0.1"
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.OpenAPIV3) {
-		serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
-		serverConfig.OpenAPIV3Config.Info.Title = "Wardle"
-		serverConfig.OpenAPIV3Config.Info.Version = "0.1"
+		//serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
+		//serverConfig.OpenAPIV3Config.Info.Title = "Wardle"
+		//serverConfig.OpenAPIV3Config.Info.Version = "0.1"
 	}
 
 	if err := applyTo(o.RecommendedOptions, serverConfig); err != nil {
@@ -159,8 +127,8 @@ func (o *WardleServerOptions) Config() (*apiserver.Config, error) {
 	return config, nil
 }
 
-// RunWardleServer starts a new WardleServer given WardleServerOptions
-func (o WardleServerOptions) RunWardleServer(stopCh <-chan struct{}) error {
+// RunHigressServer starts a new HigressServer given HigressServerOptions
+func (o HigressServerOptions) RunHigressServer(stopCh <-chan struct{}) error {
 	config, err := o.Config()
 	if err != nil {
 		return err
@@ -171,7 +139,7 @@ func (o WardleServerOptions) RunWardleServer(stopCh <-chan struct{}) error {
 		return err
 	}
 
-	server.GenericAPIServer.AddPostStartHookOrDie("start-sample-server-informers", func(context genericapiserver.PostStartHookContext) error {
+	server.GenericAPIServer.AddPostStartHookOrDie("start-higress-server-informers", func(context genericapiserver.PostStartHookContext) error {
 		//config.GenericConfig.SharedInformerFactory.Start(context.StopCh)
 		//o.SharedInformerFactory.Start(context.StopCh)
 		return nil
@@ -181,12 +149,6 @@ func (o WardleServerOptions) RunWardleServer(stopCh <-chan struct{}) error {
 }
 
 func applyTo(o *genericoptions.RecommendedOptions, config *genericapiserver.RecommendedConfig) error {
-	//if err := o.Etcd.Complete(config.Config.StorageObjectCountTracker, config.Config.DrainedNotify(), config.Config.AddPostStartHook); err != nil {
-	//	return err
-	//}
-	//if err := o.Etcd.ApplyTo(&config.Config); err != nil {
-	//	return err
-	//}
 	if err := o.EgressSelector.ApplyTo(&config.Config); err != nil {
 		return err
 	}
@@ -208,9 +170,6 @@ func applyTo(o *genericoptions.RecommendedOptions, config *genericapiserver.Reco
 	if err := o.Features.ApplyTo(&config.Config); err != nil {
 		return err
 	}
-	//if err := o.CoreAPI.ApplyTo(config); err != nil {
-	//	return err
-	//}
 	//initializers, err := o.ExtraAdmissionInitializers(config)
 	//if err != nil {
 	//	return err
@@ -227,34 +186,16 @@ func applyTo(o *genericoptions.RecommendedOptions, config *genericapiserver.Reco
 	//	initializers...); err != nil {
 	//	return err
 	//}
-	if utilfeature.DefaultFeatureGate.Enabled(features.APIPriorityAndFairness) {
-		if config.ClientConfig != nil {
-			if config.MaxRequestsInFlight+config.MaxMutatingRequestsInFlight <= 0 {
-				return fmt.Errorf("invalid configuration: MaxRequestsInFlight=%d and MaxMutatingRequestsInFlight=%d; they must add up to something positive", config.MaxRequestsInFlight, config.MaxMutatingRequestsInFlight)
-
-			}
-			config.FlowControl = utilflowcontrol.New(
-				config.SharedInformerFactory,
-				kubernetes.NewForConfigOrDie(config.ClientConfig).FlowcontrolV1beta3(),
-				config.MaxRequestsInFlight+config.MaxMutatingRequestsInFlight,
-				config.RequestTimeout/4,
-			)
-		} else {
-			klog.Warningf("Neither kubeconfig is provided nor service-account is mounted, so APIPriorityAndFairness will be disabled")
-		}
-	}
 	return nil
 }
 
 func validate(o *genericoptions.RecommendedOptions) []error {
 	errors := []error{}
-	//errors = append(errors, o.Etcd.Validate()...)
 	errors = append(errors, o.SecureServing.Validate()...)
 	//errors = append(errors, o.Authentication.Validate()...)
 	//errors = append(errors, o.Authorization.Validate()...)
 	errors = append(errors, o.Audit.Validate()...)
 	errors = append(errors, o.Features.Validate()...)
-	//errors = append(errors, o.CoreAPI.Validate()...)
 	//errors = append(errors, o.Admission.Validate()...)
 	errors = append(errors, o.EgressSelector.Validate()...)
 	errors = append(errors, o.Traces.Validate()...)
