@@ -19,13 +19,15 @@ package server
 import (
 	"fmt"
 	"io"
+	"k8s.io/apiserver/pkg/endpoints/openapi"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/client-go/informers"
+	openapicommon "k8s.io/kube-openapi/pkg/common"
 	"net"
 
 	"github.com/spf13/cobra"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/apiserver/pkg/features"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -97,6 +99,12 @@ func (o *HigressServerOptions) Complete() error {
 	return nil
 }
 
+func getOpenAPIDefinitions(openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
+	return map[string]openapicommon.OpenAPIDefinition{
+		"k8s.io/api/core/v1.ConfigMap": {},
+	}
+}
+
 // Config returns config for the api server given HigressServerOptions
 func (o *HigressServerOptions) Config() (*apiserver.Config, error) {
 	// TODO have a "real" external address
@@ -106,14 +114,15 @@ func (o *HigressServerOptions) Config() (*apiserver.Config, error) {
 
 	serverConfig := genericapiserver.NewRecommendedConfig(apiserver.Codecs)
 
-	//serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
-	//serverConfig.OpenAPIConfig.Info.Title = "Wardle"
-	//serverConfig.OpenAPIConfig.Info.Version = "0.1"
+	serverConfig.SkipOpenAPIInstallation = true
+	serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(getOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
+	serverConfig.OpenAPIConfig.Info.Title = "Higress"
+	serverConfig.OpenAPIConfig.Info.Version = "0.1"
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.OpenAPIV3) {
-		//serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
-		//serverConfig.OpenAPIV3Config.Info.Title = "Wardle"
-		//serverConfig.OpenAPIV3Config.Info.Version = "0.1"
+		serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(getOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
+		serverConfig.OpenAPIV3Config.Info.Title = "Higress"
+		serverConfig.OpenAPIV3Config.Info.Version = "0.1"
 	}
 
 	if err := applyTo(o.RecommendedOptions, serverConfig); err != nil {

@@ -17,17 +17,33 @@ limitations under the License.
 package apiserver
 
 import (
+	"context"
+	"fmt"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/version"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/apis/example"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/generic"
+	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
-
-	"k8s.io/sample-apiserver/pkg/apis/higress"
-	"k8s.io/sample-apiserver/pkg/apis/higress/install"
+	"k8s.io/apiserver/pkg/storage"
+	"k8s.io/apiserver/pkg/storage/names"
+	"path"
 )
+
+const GroupName = "higress.io"
+
+var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1"}
 
 var (
 	// Scheme defines methods for serializing and deserializing API objects.
@@ -38,9 +54,12 @@ var (
 )
 
 func init() {
-	install.Install(Scheme)
+	Scheme.AddKnownTypes(SchemeGroupVersion,
+		&corev1.ConfigMap{},
+		&corev1.ConfigMapList{},
+		&metav1.WatchEvent{},
+	)
 
-	// we need to add the options to empty v1
 	// TODO fix the server code to avoid this
 	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
 
@@ -107,21 +126,133 @@ func (c completedConfig) New() (*HigressServer, error) {
 		GenericAPIServer: genericServer,
 	}
 
-	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(higress.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(GroupName, Scheme, metav1.ParameterCodec, Codecs)
 
-	v1alpha1storage := map[string]rest.Storage{}
-	//v1alpha1storage["flunders"] = wardleregistry.RESTInPeace(flunderstorage.NewREST(Scheme, c.GenericConfig.RESTOptionsGetter))
-	//v1alpha1storage["fischers"] = wardleregistry.RESTInPeace(fischerstorage.NewREST(Scheme, c.GenericConfig.RESTOptionsGetter))
-	apiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = v1alpha1storage
-
-	v1beta1storage := map[string]rest.Storage{}
-	//v1beta1storage["flunders"] = wardleregistry.RESTInPeace(flunderstorage.NewREST(Scheme, c.GenericConfig.RESTOptionsGetter))
-	apiGroupInfo.VersionedResourcesStorageMap["v1beta1"] = v1beta1storage
+	storage := map[string]rest.Storage{}
+	storage["configmaps"] = configMapStore
+	apiGroupInfo.VersionedResourcesStorageMap[SchemeGroupVersion.Version] = storage
 
 	// Install custom API group and add it to the list of registered groups
-	//if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
-	//	return nil, err
-	//}
+	if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
+		return nil, err
+	}
 
 	return s, nil
+}
+
+type namespacedResourceStrategy struct {
+	runtime.ObjectTyper
+	names.NameGenerator
+	namespaceScoped          bool
+	allowCreateOnUpdate      bool
+	allowUnconditionalUpdate bool
+}
+
+func (s *namespacedResourceStrategy) NamespaceScoped() bool     { return s.namespaceScoped }
+func (s *namespacedResourceStrategy) AllowCreateOnUpdate() bool { return s.allowCreateOnUpdate }
+func (s *namespacedResourceStrategy) AllowUnconditionalUpdate() bool {
+	return s.allowUnconditionalUpdate
+}
+
+func (s *namespacedResourceStrategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
+	metaObj, err := meta.Accessor(obj)
+	if err != nil {
+		panic(err.Error())
+	}
+	labels := metaObj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels["prepare_create"] = "true"
+	metaObj.SetLabels(labels)
+}
+
+func (s *namespacedResourceStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {}
+func (s *namespacedResourceStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
+	return nil
+}
+func (s *namespacedResourceStrategy) WarningsOnCreate(ctx context.Context, obj runtime.Object) []string {
+	return nil
+}
+func (s *namespacedResourceStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
+	return nil
+}
+func (s *namespacedResourceStrategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {
+	return nil
+}
+func (s *namespacedResourceStrategy) Canonicalize(obj runtime.Object) {}
+
+var strategy = &namespacedResourceStrategy{Scheme, names.SimpleNameGenerator, true, false, true}
+
+const configMapPrefix = "/configmaps"
+
+var configMapStore = &genericregistry.Store{
+	NewFunc:                   func() runtime.Object { return &corev1.ConfigMap{} },
+	NewListFunc:               func() runtime.Object { return &corev1.ConfigMapList{} },
+	DefaultQualifiedResource:  example.Resource("configmaps"),
+	SingularQualifiedResource: example.Resource("configmap"),
+	CreateStrategy:            strategy,
+	UpdateStrategy:            strategy,
+	DeleteStrategy:            strategy,
+	KeyRootFunc: func(ctx context.Context) string {
+		return configMapPrefix
+	},
+	KeyFunc: func(ctx context.Context, id string) (string, error) {
+		if _, ok := genericapirequest.NamespaceFrom(ctx); !ok {
+			return "", fmt.Errorf("namespace is required")
+		}
+		return path.Join(configMapPrefix, id), nil
+	},
+	ObjectNameFunc: func(obj runtime.Object) (string, error) { return obj.(*corev1.ConfigMap).Name, nil },
+	PredicateFunc: func(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
+		return storage.SelectionPredicate{
+			Label: label,
+			Field: field,
+			GetAttrs: func(obj runtime.Object) (labels.Set, fields.Set, error) {
+				cm, ok := obj.(*corev1.ConfigMap)
+				if !ok {
+					return nil, nil, fmt.Errorf("not a configmap")
+				}
+				return cm.ObjectMeta.Labels, generic.ObjectMetaFieldsSet(&cm.ObjectMeta, true), nil
+			},
+		}
+	},
+	Storage: genericregistry.DryRunnableStorage{Storage: &dummyStore{}},
+}
+
+type dummyStore struct {
+}
+
+var cache = map[string]runtime.Object{}
+
+func (d *dummyStore) Versioner() storage.Versioner {
+	return nil
+}
+
+func (d *dummyStore) Create(ctx context.Context, key string, obj, out runtime.Object, ttl uint64) error {
+	return nil
+}
+
+func (d *dummyStore) Delete(ctx context.Context, key string, out runtime.Object, preconditions *storage.Preconditions, validateDeletion storage.ValidateObjectFunc, cachedExistingObject runtime.Object) error {
+	return nil
+}
+
+func (d *dummyStore) Watch(ctx context.Context, key string, opts storage.ListOptions) (watch.Interface, error) {
+	return nil, nil
+}
+
+func (d *dummyStore) Get(ctx context.Context, key string, opts storage.GetOptions, objPtr runtime.Object) error {
+	return nil
+}
+
+func (d *dummyStore) GetList(ctx context.Context, key string, opts storage.ListOptions, listObj runtime.Object) error {
+	return nil
+}
+
+func (d *dummyStore) GuaranteedUpdate(ctx context.Context, key string, destination runtime.Object, ignoreNotFound bool, preconditions *storage.Preconditions, tryUpdate storage.UpdateFunc, cachedExistingObject runtime.Object) error {
+	return nil
+}
+
+func (d *dummyStore) Count(key string) (int64, error) {
+	return int64(len(cache)), nil
 }
