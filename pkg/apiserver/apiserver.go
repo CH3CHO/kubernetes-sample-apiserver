@@ -36,8 +36,11 @@ import (
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/names"
+	"k8s.io/apiserver/pkg/storage/storagebackend"
+	"k8s.io/sample-apiserver/pkg/registry"
 	"path"
 )
 
@@ -128,9 +131,20 @@ func (c completedConfig) New() (*HigressServer, error) {
 
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(GroupName, Scheme, metav1.ParameterCodec, Codecs)
 
-	storage := map[string]rest.Storage{}
-	storage["configmaps"] = configMapStore
-	apiGroupInfo.VersionedResourcesStorageMap[SchemeGroupVersion.Version] = storage
+	storages := map[string]rest.Storage{}
+	groupVersionResource := SchemeGroupVersion.WithResource("configmaps").GroupResource()
+	codec, _, err := serverstorage.NewStorageCodec(serverstorage.StorageCodecConfig{
+		StorageMediaType:  runtime.ContentTypeYAML,
+		StorageSerializer: serializer.NewCodecFactory(Scheme),
+		StorageVersion:    Scheme.PrioritizedVersionsForGroup(groupVersionResource.Group)[0],
+		MemoryVersion:     Scheme.PrioritizedVersionsForGroup(groupVersionResource.Group)[0],
+		Config:            storagebackend.Config{}, // useless fields..
+	})
+	if err != nil {
+		return nil, err
+	}
+	storages["configmaps"] = registry.NewFilepathREST(groupVersionResource, codec, "/tmp/k8s", true, "configmap", newConfigMap, newConfigMapList)
+	apiGroupInfo.VersionedResourcesStorageMap[SchemeGroupVersion.Version] = storages
 
 	// Install custom API group and add it to the list of registered groups
 	if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
@@ -139,6 +153,10 @@ func (c completedConfig) New() (*HigressServer, error) {
 
 	return s, nil
 }
+
+func newConfigMap() runtime.Object { return &corev1.ConfigMap{} }
+
+func newConfigMapList() runtime.Object { return &corev1.ConfigMapList{} }
 
 type namespacedResourceStrategy struct {
 	runtime.ObjectTyper

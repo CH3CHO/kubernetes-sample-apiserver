@@ -18,13 +18,12 @@ package registry
 
 import (
 	"fmt"
-
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+	"k8s.io/apiserver/pkg/registry/rest"
 )
 
 // REST implements a RESTStorage for API services against etcd
 type REST struct {
-	*genericregistry.Store
+	rest.Storage
 }
 
 // RESTInPeace is just a simple function that panics on error.
