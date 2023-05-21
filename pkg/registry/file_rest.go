@@ -124,7 +124,7 @@ func (f *fileREST) List(
 	}
 
 	dirname := f.objectDirName(ctx)
-	if err := visitDir(dirname, f.newFunc, f.codec, func(path string, obj runtime.Object) {
+	if err := visitDir(dirname, f.objExtension, f.newFunc, f.codec, func(path string, obj runtime.Object) {
 		appendItem(v, obj)
 	}); err != nil {
 		//return nil, fmt.Errorf("failed walking filepath %v", dirname)
@@ -287,7 +287,7 @@ func (f *fileREST) DeleteCollection(
 		return nil, err
 	}
 	dirname := f.objectDirName(ctx)
-	if err := visitDir(dirname, f.newFunc, f.codec, func(path string, obj runtime.Object) {
+	if err := visitDir(dirname, f.objExtension, f.newFunc, f.codec, func(path string, obj runtime.Object) {
 		_ = os.Remove(path)
 		appendItem(v, obj)
 	}); err != nil {
@@ -300,9 +300,9 @@ func (f *fileREST) objectFileName(ctx context.Context, name string) string {
 	if f.isNamespaced {
 		// FIXME: return error if namespace is not found
 		ns, _ := genericapirequest.NamespaceFrom(ctx)
-		return filepath.Join(f.objRootPath, ns, name+".json")
+		return filepath.Join(f.objRootPath, ns, name+f.objExtension)
 	}
-	return filepath.Join(f.objRootPath, name+".json")
+	return filepath.Join(f.objRootPath, name+f.objExtension)
 }
 
 func (f *fileREST) objectDirName(ctx context.Context) string {
@@ -347,7 +347,7 @@ func ensureDir(dirname string) error {
 	return nil
 }
 
-func visitDir(dirname string, newFunc func() runtime.Object, codec runtime.Decoder, visitFunc func(string, runtime.Object)) error {
+func visitDir(dirname string, extension string, newFunc func() runtime.Object, codec runtime.Decoder, visitFunc func(string, runtime.Object)) error {
 	return filepath.Walk(dirname, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -355,7 +355,7 @@ func visitDir(dirname string, newFunc func() runtime.Object, codec runtime.Decod
 		if info.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(info.Name(), ".json") {
+		if !strings.HasSuffix(info.Name(), extension) {
 			return nil
 		}
 		newObj, err := read(codec, path, newFunc)
