@@ -29,61 +29,63 @@ var ErrFileNotExists = fmt.Errorf("file doesn't exist")
 // ErrNamespaceNotExists means the directory for the namespace doesn't actually exist.
 var ErrNamespaceNotExists = errors.New("namespace does not exist")
 
-var _ rest.StandardStorage = &filepathREST{}
-var _ rest.Scoper = &filepathREST{}
-var _ rest.Storage = &filepathREST{}
+var _ rest.StandardStorage = &fileREST{}
+var _ rest.Scoper = &fileREST{}
+var _ rest.Storage = &fileREST{}
 
-// NewFilepathREST instantiates a new REST storage.
-func NewFilepathREST(
+// NewFileREST instantiates a new REST storage.
+func NewFileREST(
 	groupResource schema.GroupResource,
 	codec runtime.Codec,
-	rootpath string,
+	rootPath string,
+	extension string,
 	isNamespaced bool,
 	singularName string,
 	newFunc func() runtime.Object,
 	newListFunc func() runtime.Object,
 ) rest.Storage {
-	objRoot := filepath.Join(rootpath, groupResource.Group, groupResource.Resource)
+	objRoot := filepath.Join(rootPath, groupResource.Group, groupResource.Resource)
 	if err := ensureDir(objRoot); err != nil {
-		panic(fmt.Sprintf("unable to write data dir: %s", err))
+		panic(fmt.Sprintf("unable to create data dir: %s", err))
 	}
 
 	// file REST
-	rest := &filepathREST{
+	return &fileREST{
 		TableConvertor: rest.NewDefaultTableConvertor(groupResource),
 		codec:          codec,
 		objRootPath:    objRoot,
+		objExtension:   extension,
 		isNamespaced:   isNamespaced,
 		singularName:   singularName,
 		newFunc:        newFunc,
 		newListFunc:    newListFunc,
-		watchers:       make(map[int]*jsonWatch, 10),
+		watchers:       make(map[int]*fileWatch, 10),
 	}
-	return rest
 }
 
-type filepathREST struct {
+type fileREST struct {
 	rest.TableConvertor
 	codec        runtime.Codec
 	objRootPath  string
+	objExtension string
 	isNamespaced bool
 	singularName string
 
 	muWatchers sync.RWMutex
-	watchers   map[int]*jsonWatch
+	watchers   map[int]*fileWatch
 
 	newFunc     func() runtime.Object
 	newListFunc func() runtime.Object
 }
 
-func (f *filepathREST) GetSingularName() string {
+func (f *fileREST) GetSingularName() string {
 	return f.singularName
 }
 
-func (f *filepathREST) Destroy() {
+func (f *fileREST) Destroy() {
 }
 
-func (f *filepathREST) notifyWatchers(ev watch.Event) {
+func (f *fileREST) notifyWatchers(ev watch.Event) {
 	f.muWatchers.RLock()
 	for _, w := range f.watchers {
 		w.ch <- ev
@@ -91,19 +93,19 @@ func (f *filepathREST) notifyWatchers(ev watch.Event) {
 	f.muWatchers.RUnlock()
 }
 
-func (f *filepathREST) New() runtime.Object {
+func (f *fileREST) New() runtime.Object {
 	return f.newFunc()
 }
 
-func (f *filepathREST) NewList() runtime.Object {
+func (f *fileREST) NewList() runtime.Object {
 	return f.newListFunc()
 }
 
-func (f *filepathREST) NamespaceScoped() bool {
+func (f *fileREST) NamespaceScoped() bool {
 	return f.isNamespaced
 }
 
-func (f *filepathREST) Get(
+func (f *fileREST) Get(
 	ctx context.Context,
 	name string,
 	options *metav1.GetOptions,
@@ -111,7 +113,7 @@ func (f *filepathREST) Get(
 	return read(f.codec, f.objectFileName(ctx, name), f.newFunc)
 }
 
-func (f *filepathREST) List(
+func (f *fileREST) List(
 	ctx context.Context,
 	options *metainternalversion.ListOptions,
 ) (runtime.Object, error) {
@@ -131,7 +133,7 @@ func (f *filepathREST) List(
 	return newListObj, nil
 }
 
-func (f *filepathREST) Create(
+func (f *fileREST) Create(
 	ctx context.Context,
 	obj runtime.Object,
 	createValidation rest.ValidateObjectFunc,
@@ -176,7 +178,7 @@ func (f *filepathREST) Create(
 	return obj, nil
 }
 
-func (f *filepathREST) Update(
+func (f *fileREST) Update(
 	ctx context.Context,
 	name string,
 	objInfo rest.UpdatedObjectInfo,
@@ -243,7 +245,7 @@ func (f *filepathREST) Update(
 	return updatedObj, false, nil
 }
 
-func (f *filepathREST) Delete(
+func (f *fileREST) Delete(
 	ctx context.Context,
 	name string,
 	deleteValidation rest.ValidateObjectFunc,
@@ -273,7 +275,7 @@ func (f *filepathREST) Delete(
 	return oldObj, true, nil
 }
 
-func (f *filepathREST) DeleteCollection(
+func (f *fileREST) DeleteCollection(
 	ctx context.Context,
 	deleteValidation rest.ValidateObjectFunc,
 	options *metav1.DeleteOptions,
@@ -294,7 +296,7 @@ func (f *filepathREST) DeleteCollection(
 	return newListObj, nil
 }
 
-func (f *filepathREST) objectFileName(ctx context.Context, name string) string {
+func (f *fileREST) objectFileName(ctx context.Context, name string) string {
 	if f.isNamespaced {
 		// FIXME: return error if namespace is not found
 		ns, _ := genericapirequest.NamespaceFrom(ctx)
@@ -303,7 +305,7 @@ func (f *filepathREST) objectFileName(ctx context.Context, name string) string {
 	return filepath.Join(f.objRootPath, name+".json")
 }
 
-func (f *filepathREST) objectDirName(ctx context.Context) string {
+func (f *fileREST) objectDirName(ctx context.Context) string {
 	if f.isNamespaced {
 		// FIXME: return error if namespace is not found
 		ns, _ := genericapirequest.NamespaceFrom(ctx)
@@ -381,8 +383,8 @@ func getListPrt(listObj runtime.Object) (reflect.Value, error) {
 	return v, nil
 }
 
-func (f *filepathREST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
-	jw := &jsonWatch{
+func (f *fileREST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
+	jw := &fileWatch{
 		id: len(f.watchers),
 		f:  f,
 		ch: make(chan watch.Event, 10),
@@ -411,23 +413,23 @@ func (f *filepathREST) Watch(ctx context.Context, options *metainternalversion.L
 	return jw, nil
 }
 
-type jsonWatch struct {
-	f  *filepathREST
+type fileWatch struct {
+	f  *fileREST
 	id int
 	ch chan watch.Event
 }
 
-func (w *jsonWatch) Stop() {
+func (w *fileWatch) Stop() {
 	w.f.muWatchers.Lock()
 	delete(w.f.watchers, w.id)
 	w.f.muWatchers.Unlock()
 }
 
-func (w *jsonWatch) ResultChan() <-chan watch.Event {
+func (w *fileWatch) ResultChan() <-chan watch.Event {
 	return w.ch
 }
 
 // TODO: implement custom table printer optionally
-// func (f *filepathREST) ConvertToTable(ctx context.Context, object runtime.Object, tableOptions runtime.Object) (*metav1.Table, error) {
+// func (f *fileREST) ConvertToTable(ctx context.Context, object runtime.Object, tableOptions runtime.Object) (*metav1.Table, error) {
 // 	return &metav1.Table{}, nil
 // }

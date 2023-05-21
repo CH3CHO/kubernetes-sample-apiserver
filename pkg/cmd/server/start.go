@@ -102,6 +102,12 @@ func (o *HigressServerOptions) Complete() error {
 func getOpenAPIDefinitions(openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
 	return map[string]openapicommon.OpenAPIDefinition{
 		"k8s.io/api/core/v1.ConfigMap": {},
+		"k8s.io/api/core/v1.Secret":    {},
+
+		"k8s.io/api/networking/v1.Ingress": {},
+
+		"github.com/alibaba/higress/client/pkg/apis/extensions/v1alpha1.WasmPlugin": {},
+		"github.com/alibaba/higress/client/pkg/apis/networking/v1.McpBridge":        {},
 	}
 }
 
