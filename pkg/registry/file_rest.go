@@ -6,24 +6,25 @@ import (
 	"errors"
 	"fmt"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apiserver/pkg/storage"
-	"os"
-	"path/filepath"
-	"reflect"
-	"strings"
-	"sync"
-
 	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/conversion"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/storage"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 // ErrFileNotExists means the file doesn't actually exist.
@@ -198,11 +199,15 @@ func (f *fileREST) Create(
 	if err != nil {
 		return nil, err
 	}
+
 	filename := f.objectFileName(ctx, accessor.GetName())
 
 	if exists(filename) {
 		return nil, ErrFileNotExists
 	}
+
+	accessor.SetCreationTimestamp(metav1.NewTime(time.Now()))
+	accessor.SetResourceVersion("1")
 
 	if err := write(f.codec, filename, obj); err != nil {
 		return nil, err
@@ -252,12 +257,26 @@ func (f *fileREST) Update(
 	}
 	filename := f.objectFileName(ctx, name)
 
+	oldAccessor, err := meta.Accessor(oldObj)
+	if err != nil {
+		return nil, false, err
+	}
+
+	updatedAccessor, err := meta.Accessor(updatedObj)
+	if err != nil {
+		return nil, false, err
+	}
+
 	if isCreate {
 		if createValidation != nil {
 			if err := createValidation(ctx, updatedObj); err != nil {
 				return nil, false, err
 			}
 		}
+
+		updatedAccessor.SetCreationTimestamp(metav1.NewTime(time.Now()))
+		updatedAccessor.SetResourceVersion("1")
+
 		if err := write(f.codec, filename, updatedObj); err != nil {
 			return nil, false, err
 		}
@@ -273,9 +292,34 @@ func (f *fileREST) Update(
 			return nil, false, err
 		}
 	}
+
+	if updatedAccessor.GetResourceVersion() != oldAccessor.GetResourceVersion() {
+		requestInfo, ok := genericapirequest.RequestInfoFrom(ctx)
+		var groupResource = schema.GroupResource{}
+		if ok {
+			groupResource.Group = requestInfo.APIGroup
+			groupResource.Resource = requestInfo.Resource
+		}
+		return nil, false, apierrors.NewConflict(groupResource, name, nil)
+	}
+
+	currentResourceVersion := updatedAccessor.GetResourceVersion()
+	var newResourceVersion uint64
+	if currentResourceVersion == "" {
+		newResourceVersion = 1
+	} else {
+		newResourceVersion, err = strconv.ParseUint(currentResourceVersion, 10, 64)
+		if err != nil {
+			return nil, false, err
+		}
+		newResourceVersion++
+	}
+	updatedAccessor.SetResourceVersion(strconv.FormatUint(newResourceVersion, 10))
+
 	if err := write(f.codec, filename, updatedObj); err != nil {
 		return nil, false, err
 	}
+
 	f.notifyWatchers(watch.Event{
 		Type:   watch.Modified,
 		Object: updatedObj,
