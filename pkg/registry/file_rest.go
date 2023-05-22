@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apiserver/pkg/storage"
@@ -124,7 +125,17 @@ func (f *fileREST) Get(
 	name string,
 	options *metav1.GetOptions,
 ) (runtime.Object, error) {
-	return read(f.codec, f.objectFileName(ctx, name), f.newFunc)
+	obj, err := read(f.codec, f.objectFileName(ctx, name), f.newFunc)
+	if obj == nil && err == nil {
+		requestInfo, ok := genericapirequest.RequestInfoFrom(ctx)
+		var groupResource = schema.GroupResource{}
+		if ok {
+			groupResource.Group = requestInfo.APIGroup
+			groupResource.Resource = requestInfo.Resource
+		}
+		return nil, apierrors.NewNotFound(groupResource, name)
+	}
+	return obj, err
 }
 
 func (f *fileREST) List(
@@ -353,7 +364,7 @@ func read(decoder runtime.Decoder, path string, newFunc func() runtime.Object) (
 	cleanedPath := filepath.Clean(path)
 	if _, err := os.Stat(cleanedPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, storage.NewKeyNotFoundError(path, 0)
+			return nil, nil
 		} else {
 			return nil, err
 		}
