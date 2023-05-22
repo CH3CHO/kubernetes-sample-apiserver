@@ -23,6 +23,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -30,6 +32,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
+	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/sample-apiserver/pkg/registry"
 )
@@ -59,6 +62,15 @@ func init() {
 	metav1.AddToGroupVersion(Scheme, hiextensionsv1alpha1.SchemeGroupVersion)
 	_ = hinetworkingv1.AddToScheme(Scheme)
 	metav1.AddToGroupVersion(Scheme, hinetworkingv1.SchemeGroupVersion)
+	_ = Scheme.AddFieldLabelConversionFunc(corev1.SchemeGroupVersion.WithKind("Secret"),
+		func(label, value string) (internalLabel, internalValue string, err error) {
+			switch label {
+			case "type":
+				return label, value, nil
+			default:
+				return runtime.DefaultMetaV1FieldSelectorConversion(label, value)
+			}
+		})
 
 	// TODO: keep the generic API server from wanting this
 	unversioned := schema.GroupVersion{Group: "", Version: "v1"}
@@ -128,10 +140,23 @@ func (c completedConfig) New() (*HigressServer, error) {
 		corev1Storages := map[string]rest.Storage{}
 		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "configmap", "configmaps",
 			func() runtime.Object { return &corev1.ConfigMap{} },
-			func() runtime.Object { return &corev1.ConfigMapList{} })
+			func() runtime.Object { return &corev1.ConfigMapList{} },
+			nil)
 		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "secret", "secrets",
 			func() runtime.Object { return &corev1.Secret{} },
-			func() runtime.Object { return &corev1.SecretList{} })
+			func() runtime.Object { return &corev1.SecretList{} },
+			func(obj runtime.Object) (labels.Set, fields.Set, error) {
+				labels, fields, err := storage.DefaultNamespaceScopedAttr(obj)
+				if err != nil {
+					return labels, fields, err
+				}
+				secret, ok := obj.(*corev1.Secret)
+				if !ok {
+					return labels, fields, err
+				}
+				fields["type"] = string(secret.Type)
+				return labels, fields, err
+			})
 		corev1ApiGroupInfo.VersionedResourcesStorageMap[corev1.SchemeGroupVersion.Version] = corev1Storages
 		if err := s.GenericAPIServer.InstallLegacyAPIGroup("/api", &corev1ApiGroupInfo); err != nil {
 			return nil, err
@@ -143,7 +168,8 @@ func (c completedConfig) New() (*HigressServer, error) {
 		networkingv1Storages := map[string]rest.Storage{}
 		appendStorage(networkingv1Storages, networkingv1.SchemeGroupVersion, true, "ingress", "ingresses",
 			func() runtime.Object { return &networkingv1.Ingress{} },
-			func() runtime.Object { return &networkingv1.IngressList{} })
+			func() runtime.Object { return &networkingv1.IngressList{} },
+			nil)
 		networkingv1ApiGroupInfo.VersionedResourcesStorageMap[networkingv1.SchemeGroupVersion.Version] = networkingv1Storages
 		if err := s.GenericAPIServer.InstallAPIGroup(&networkingv1ApiGroupInfo); err != nil {
 			return nil, err
@@ -155,7 +181,8 @@ func (c completedConfig) New() (*HigressServer, error) {
 		hiextensionv1alphaStorages := map[string]rest.Storage{}
 		appendStorage(hiextensionv1alphaStorages, hiextensionsv1alpha1.SchemeGroupVersion, true, "wasmplugin", "wasmplugins",
 			func() runtime.Object { return &hiextensionsv1alpha1.WasmPlugin{} },
-			func() runtime.Object { return &hiextensionsv1alpha1.WasmPluginList{} })
+			func() runtime.Object { return &hiextensionsv1alpha1.WasmPluginList{} },
+			nil)
 		hiextensionv1alphaApiGroupInfo.VersionedResourcesStorageMap[hiextensionsv1alpha1.SchemeGroupVersion.Version] = hiextensionv1alphaStorages
 		if err := s.GenericAPIServer.InstallAPIGroup(&hiextensionv1alphaApiGroupInfo); err != nil {
 			return nil, err
@@ -167,7 +194,8 @@ func (c completedConfig) New() (*HigressServer, error) {
 		hinetworkingv1Storages := map[string]rest.Storage{}
 		appendStorage(hinetworkingv1Storages, hinetworkingv1.SchemeGroupVersion, true, "mcpbridge", "mcpbridges",
 			func() runtime.Object { return &hinetworkingv1.McpBridge{} },
-			func() runtime.Object { return &hinetworkingv1.McpBridgeList{} })
+			func() runtime.Object { return &hinetworkingv1.McpBridgeList{} },
+			nil)
 		hinetworkingv1ApiGroupInfo.VersionedResourcesStorageMap[hinetworkingv1.SchemeGroupVersion.Version] = hinetworkingv1Storages
 		if err := s.GenericAPIServer.InstallAPIGroup(&hinetworkingv1ApiGroupInfo); err != nil {
 			return nil, err
@@ -183,7 +211,8 @@ func appendStorage(storages map[string]rest.Storage,
 	singularName string,
 	pluralName string,
 	newFunc func() runtime.Object,
-	newListFunc func() runtime.Object) {
+	newListFunc func() runtime.Object,
+	attrFunc storage.AttrFunc) {
 	groupVersionResource := groupVersion.WithResource(pluralName).GroupResource()
 	codec, _, err := serverstorage.NewStorageCodec(serverstorage.StorageCodecConfig{
 		StorageMediaType:  contentType,
@@ -196,5 +225,5 @@ func appendStorage(storages map[string]rest.Storage,
 		err = fmt.Errorf("unable to create REST storage for a resource due to %v, will die", err)
 		panic(err)
 	}
-	storages[pluralName] = registry.NewFileREST(groupVersionResource, codec, rootPath, extension, isNamespaced, singularName, newFunc, newListFunc)
+	storages[pluralName] = registry.NewFileREST(groupVersionResource, codec, rootPath, extension, isNamespaced, singularName, newFunc, newListFunc, attrFunc)
 }

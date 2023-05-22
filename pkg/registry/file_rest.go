@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apiserver/pkg/storage"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -43,12 +45,22 @@ func NewFileREST(
 	singularName string,
 	newFunc func() runtime.Object,
 	newListFunc func() runtime.Object,
+	attrFunc storage.AttrFunc,
 ) rest.Storage {
 	objRoot := filepath.Join(rootPath, groupResource.Group, groupResource.Resource)
 	if err := ensureDir(objRoot); err != nil {
 		panic(fmt.Sprintf("unable to create data dir: %s", err))
 	}
 
+	if attrFunc == nil {
+		if isNamespaced {
+			if isNamespaced {
+				attrFunc = storage.DefaultNamespaceScopedAttr
+			} else {
+				attrFunc = storage.DefaultClusterScopedAttr
+			}
+		}
+	}
 	// file REST
 	return &fileREST{
 		TableConvertor: rest.NewDefaultTableConvertor(groupResource),
@@ -59,6 +71,7 @@ func NewFileREST(
 		singularName:   singularName,
 		newFunc:        newFunc,
 		newListFunc:    newListFunc,
+		attrFunc:       attrFunc,
 		watchers:       make(map[int]*fileWatch, 10),
 	}
 }
@@ -76,6 +89,7 @@ type fileREST struct {
 
 	newFunc     func() runtime.Object
 	newListFunc func() runtime.Object
+	attrFunc    storage.AttrFunc
 }
 
 func (f *fileREST) GetSingularName() string {
@@ -117,6 +131,17 @@ func (f *fileREST) List(
 	ctx context.Context,
 	options *metainternalversion.ListOptions,
 ) (runtime.Object, error) {
+	label := labels.Everything()
+	if options != nil && options.LabelSelector != nil {
+		label = options.LabelSelector
+	}
+	field := fields.Everything()
+	if options != nil && options.FieldSelector != nil {
+		field = options.FieldSelector
+	}
+
+	predicate := f.predicateFunc(label, field)
+
 	newListObj := f.NewList()
 	v, err := getListPrt(newListObj)
 	if err != nil {
@@ -125,7 +150,9 @@ func (f *fileREST) List(
 
 	dirname := f.objectDirName(ctx)
 	if err := visitDir(dirname, f.objExtension, f.newFunc, f.codec, func(path string, obj runtime.Object) {
-		appendItem(v, obj)
+		if ok, err := predicate.Matches(obj); err == nil && ok {
+			appendItem(v, obj)
+		}
 	}); err != nil {
 		//return nil, fmt.Errorf("failed walking filepath %v", dirname)
 		return newListObj, nil
@@ -319,11 +346,19 @@ func write(encoder runtime.Encoder, filepath string, obj runtime.Object) error {
 	if err := encoder.Encode(obj, buf); err != nil {
 		return err
 	}
-	return ioutil.WriteFile(filepath, buf.Bytes(), 0600)
+	return os.WriteFile(filepath, buf.Bytes(), 0600)
 }
 
 func read(decoder runtime.Decoder, path string, newFunc func() runtime.Object) (runtime.Object, error) {
-	content, err := ioutil.ReadFile(filepath.Clean(path))
+	cleanedPath := filepath.Clean(path)
+	if _, err := os.Stat(cleanedPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, storage.NewKeyNotFoundError(path, 0)
+		} else {
+			return nil, err
+		}
+	}
+	content, err := os.ReadFile(cleanedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -411,6 +446,14 @@ func (f *fileREST) Watch(ctx context.Context, options *metainternalversion.ListO
 	f.muWatchers.Unlock()
 
 	return jw, nil
+}
+
+func (f *fileREST) predicateFunc(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
+	return storage.SelectionPredicate{
+		Label:    label,
+		Field:    field,
+		GetAttrs: f.attrFunc,
+	}
 }
 
 type fileWatch struct {
