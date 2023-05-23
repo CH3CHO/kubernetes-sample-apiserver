@@ -32,6 +32,7 @@ import (
 const namesItemKey = "__names__"
 const newLine = "\n"
 const newLineWindows = "\r\n"
+const dataIdSeparator = "."
 
 // ErrItemNotExists means the item doesn't actually exist.
 var ErrItemNotExists = fmt.Errorf("item doesn't exist")
@@ -47,8 +48,7 @@ var _ rest.Storage = &nacosREST{}
 func NewNacosREST(
 	groupResource schema.GroupResource,
 	codec runtime.Codec,
-	configClient *config_client.ConfigClient,
-	nacosGroup string,
+	configClient config_client.IConfigClient,
 	isNamespaced bool,
 	singularName string,
 	newFunc func() runtime.Object,
@@ -70,10 +70,9 @@ func NewNacosREST(
 		groupResource:  groupResource,
 		codec:          codec,
 		configClient:   configClient,
-		nacosGroup:     nacosGroup,
 		isNamespaced:   isNamespaced,
 		singularName:   singularName,
-		dataIdPrefix:   strings.ToLower(groupResource.Resource) + ".",
+		dataIdPrefix:   strings.ToLower(groupResource.Resource),
 		newFunc:        newFunc,
 		newListFunc:    newListFunc,
 		attrFunc:       attrFunc,
@@ -85,8 +84,7 @@ type nacosREST struct {
 	rest.TableConvertor
 	groupResource schema.GroupResource
 	codec         runtime.Codec
-	configClient  *config_client.ConfigClient
-	nacosGroup    string
+	configClient  config_client.IConfigClient
 	isNamespaced  bool
 	singularName  string
 	dataIdPrefix  string
@@ -131,7 +129,8 @@ func (f *nacosREST) Get(
 	name string,
 	options *metav1.GetOptions,
 ) (runtime.Object, error) {
-	obj, _, err := f.read(f.codec, f.objectDataId(ctx, name), f.newFunc)
+	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	obj, _, err := f.read(f.codec, ns, f.objectDataId(ctx, name), f.newFunc)
 	if obj == nil && err == nil {
 		requestInfo, ok := genericapirequest.RequestInfoFrom(ctx)
 		var groupResource = schema.GroupResource{}
@@ -154,9 +153,10 @@ func (f *nacosREST) List(
 		return nil, err
 	}
 
+	ns, _ := genericapirequest.NamespaceFrom(ctx)
 	list, err := f.configClient.GetConfig(vo.ConfigParam{
 		DataId: f.objectNamesDataId(ctx),
-		Group:  f.nacosGroup,
+		Group:  ns,
 	})
 	if err != nil {
 		return nil, err
@@ -194,35 +194,39 @@ func (f *nacosREST) Create(
 		return nil, err
 	}
 
+	ns, _ := genericapirequest.NamespaceFrom(ctx)
 	namesDataId := f.objectNamesDataId(ctx)
 	list, err := f.configClient.GetConfig(vo.ConfigParam{
 		DataId: namesDataId,
-		Group:  f.nacosGroup,
+		Group:  ns,
 	})
 	if err != nil {
 		return nil, ErrFileNotExists
 	}
 
 	name := accessor.GetName()
+	var newList string
 	if len(list) != 0 {
 		if names := strings.Split(strings.ReplaceAll(list, newLineWindows, newLine), newLine); slices.Contains(names, name) {
 			return nil, apierrors.NewConflict(f.groupResource, name, ErrItemAlreadyExists)
 		}
+		newList = strings.Join([]string{list, name}, newLine)
+	} else {
+		newList = name
 	}
-	newList := strings.Join([]string{list, name}, newLine)
-	if err := f.writeRaw(namesDataId, newList, calculateMd5(list)); err != nil {
+	if err := f.writeRaw(ns, namesDataId, newList, calculateMd5(list)); err != nil {
 		return nil, err
 	}
 
 	dataId := f.objectDataId(ctx, name)
 
-	currentConfig, err := f.readRaw(dataId)
+	currentConfig, err := f.readRaw(ns, dataId)
 	if currentConfig != "" && err == nil {
 		return nil, apierrors.NewConflict(f.groupResource, name, ErrItemAlreadyExists)
 	}
 
 	accessor.SetCreationTimestamp(metav1.NewTime(time.Now()))
-	if err := f.write(f.codec, dataId, calculateMd5(currentConfig), obj); err != nil {
+	if err := f.write(f.codec, ns, dataId, calculateMd5(currentConfig), obj); err != nil {
 		return nil, err
 	}
 
@@ -243,10 +247,11 @@ func (f *nacosREST) Update(
 	forceAllowCreate bool,
 	options *metav1.UpdateOptions,
 ) (runtime.Object, bool, error) {
+	ns, _ := genericapirequest.NamespaceFrom(ctx)
 	dataId := f.objectDataId(ctx, name)
 
 	isCreate := false
-	oldObj, oldConfig, err := f.read(f.codec, dataId, f.newFunc)
+	oldObj, oldConfig, err := f.read(f.codec, ns, dataId, f.newFunc)
 	if err != nil {
 		return nil, false, err
 	}
@@ -287,7 +292,7 @@ func (f *nacosREST) Update(
 		return nil, false, apierrors.NewConflict(f.groupResource, name, nil)
 	}
 
-	if err := f.write(f.codec, dataId, calculateMd5(oldConfig), updatedObj); err != nil {
+	if err := f.write(f.codec, ns, dataId, calculateMd5(oldConfig), updatedObj); err != nil {
 		return nil, false, err
 	}
 
@@ -315,9 +320,10 @@ func (f *nacosREST) Delete(
 		}
 	}
 
+	ns, _ := genericapirequest.NamespaceFrom(ctx)
 	deleted, err := f.configClient.DeleteConfig(vo.ConfigParam{
 		DataId: dataId,
-		Group:  f.nacosGroup,
+		Group:  ns,
 	})
 	if err != nil {
 		return nil, false, err
@@ -359,21 +365,17 @@ func (f *nacosREST) DeleteCollection(
 }
 
 func (f *nacosREST) objectDataId(ctx context.Context, name string) string {
-	if f.isNamespaced {
-		// FIXME: return error if namespace is not found
-		ns, _ := genericapirequest.NamespaceFrom(ctx)
-		return strings.Join([]string{f.dataIdPrefix, ns, name}, ".")
-	}
-	return strings.Join([]string{f.dataIdPrefix, name}, ".")
+	//if f.isNamespaced {
+	//	// FIXME: return error if namespace is not found
+	//	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	//	return strings.Join([]string{f.dataIdPrefix, ns, name}, dataIdSeparator)
+	//}
+	return strings.Join([]string{f.dataIdPrefix, name}, dataIdSeparator)
 }
 
 func (f *nacosREST) objectNamesDataId(ctx context.Context) string {
-	if f.isNamespaced {
-		// FIXME: return error if namespace is not found
-		ns, _ := genericapirequest.NamespaceFrom(ctx)
-		return strings.Join([]string{f.dataIdPrefix, ns, namesItemKey}, ".")
-	}
-	return strings.Join([]string{f.dataIdPrefix, namesItemKey}, ".")
+	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	return strings.Join([]string{f.dataIdPrefix, ns, namesItemKey}, dataIdSeparator)
 }
 
 func (f *nacosREST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
@@ -424,15 +426,15 @@ func (f *nacosREST) buildListPredicate(options *metainternalversion.ListOptions)
 	}
 }
 
-func (f *nacosREST) readRaw(dataId string) (string, error) {
+func (f *nacosREST) readRaw(group, dataId string) (string, error) {
 	return f.configClient.GetConfig(vo.ConfigParam{
 		DataId: dataId,
-		Group:  f.nacosGroup,
+		Group:  group,
 	})
 }
 
-func (f *nacosREST) read(decoder runtime.Decoder, dataId string, newFunc func() runtime.Object) (runtime.Object, string, error) {
-	config, err := f.readRaw(dataId)
+func (f *nacosREST) read(decoder runtime.Decoder, group, dataId string, newFunc func() runtime.Object) (runtime.Object, string, error) {
+	config, err := f.readRaw(group, dataId)
 	if err != nil {
 		return nil, "", err
 	}
@@ -443,7 +445,7 @@ func (f *nacosREST) read(decoder runtime.Decoder, dataId string, newFunc func() 
 	return obj, config, nil
 }
 
-func (f *nacosREST) write(encoder runtime.Encoder, dataId, oldMd5 string, obj runtime.Object) error {
+func (f *nacosREST) write(encoder runtime.Encoder, group, dataId, oldMd5 string, obj runtime.Object) error {
 	accessor, err := meta.Accessor(obj)
 	if err != nil {
 		return err
@@ -467,13 +469,13 @@ func (f *nacosREST) write(encoder runtime.Encoder, dataId, oldMd5 string, obj ru
 	}
 	content = buf.String()
 
-	return f.writeRaw(dataId, content, oldMd5)
+	return f.writeRaw(group, dataId, content, oldMd5)
 }
 
-func (f *nacosREST) writeRaw(dataId, content, oldMd5 string) error {
+func (f *nacosREST) writeRaw(group, dataId, content, oldMd5 string) error {
 	published, err := f.configClient.PublishConfig(vo.ConfigParam{
 		DataId:  dataId,
-		Group:   f.nacosGroup,
+		Group:   group,
 		Content: content,
 		CasMd5:  oldMd5,
 	})

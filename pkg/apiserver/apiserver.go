@@ -20,6 +20,9 @@ import (
 	"fmt"
 	hiextensionsv1alpha1 "github.com/alibaba/higress/client/pkg/apis/extensions/v1alpha1"
 	hinetworkingv1 "github.com/alibaba/higress/client/pkg/apis/networking/v1"
+	"github.com/nacos-group/nacos-sdk-go/v2/clients"
+	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
+	"github.com/nacos-group/nacos-sdk-go/v2/vo"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,12 +41,11 @@ import (
 )
 
 const (
-	rootPath    = "/tmp/k8s"
-	contentType = runtime.ContentTypeYAML
-	extension   = ".yaml"
+	rootPath         = "/tmp/k8s"
+	contentType      = runtime.ContentTypeYAML
+	extension        = ".yaml"
+	nacosNamespaceId = "higress"
 )
-
-var SchemeGroupVersion = corev1.SchemeGroupVersion
 
 var (
 	// Scheme defines methods for serializing and deserializing API objects.
@@ -51,6 +53,27 @@ var (
 	// Codecs provides methods for retrieving codecs and serializers for specific
 	// versions and content types.
 	Codecs = serializer.NewCodecFactory(Scheme)
+
+	configClient, _ = clients.NewConfigClient(
+		vo.NacosClientParam{
+			ClientConfig: constant.NewClientConfig(
+				constant.WithNamespaceId(nacosNamespaceId), //当namespace是public时，此处填空字符串。
+				constant.WithTimeoutMs(5000),
+				constant.WithNotLoadCacheAtStart(true),
+				constant.WithLogDir("/tmp/nacos/log"),
+				constant.WithCacheDir("/tmp/nacos/cache"),
+				constant.WithLogLevel("debug"),
+			),
+			ServerConfigs: []constant.ServerConfig{
+				{
+					IpAddr:      "127.0.0.1",
+					ContextPath: "/nacos",
+					Port:        8848,
+					Scheme:      "http",
+				},
+			},
+		},
+	)
 )
 
 func init() {
@@ -225,5 +248,6 @@ func appendStorage(storages map[string]rest.Storage,
 		err = fmt.Errorf("unable to create REST storage for a resource due to %v, will die", err)
 		panic(err)
 	}
-	storages[pluralName] = registry.NewFileREST(groupVersionResource, codec, rootPath, extension, isNamespaced, singularName, newFunc, newListFunc, attrFunc)
+	//storages[pluralName] = registry.NewFileREST(groupVersionResource, codec, rootPath, extension, isNamespaced, singularName, newFunc, newListFunc, attrFunc)
+	storages[pluralName] = registry.NewNacosREST(groupVersionResource, codec, configClient, isNamespaced, singularName, newFunc, newListFunc, attrFunc)
 }
