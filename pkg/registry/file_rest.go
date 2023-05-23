@@ -474,7 +474,7 @@ func getListPrt(listObj runtime.Object) (reflect.Value, error) {
 }
 
 func (f *fileREST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
-	jw := &fileWatch{
+	fw := &fileWatch{
 		id: len(f.watchers),
 		f:  f,
 		ch: make(chan watch.Event, 10),
@@ -490,17 +490,17 @@ func (f *fileREST) Watch(ctx context.Context, options *metainternalversion.ListO
 
 	for i := 0; i < items.Len(); i++ {
 		obj := items.Index(i).Addr().Interface().(runtime.Object)
-		jw.ch <- watch.Event{
+		fw.ch <- watch.Event{
 			Type:   watch.Added,
 			Object: obj,
 		}
 	}
 
 	f.muWatchers.Lock()
-	f.watchers[jw.id] = jw
+	f.watchers[fw.id] = fw
 	f.muWatchers.Unlock()
 
-	return jw, nil
+	return fw, nil
 }
 
 func (f *fileREST) predicateFunc(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
