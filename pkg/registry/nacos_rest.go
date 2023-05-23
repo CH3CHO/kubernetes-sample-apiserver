@@ -374,8 +374,7 @@ func (f *nacosREST) objectDataId(ctx context.Context, name string) string {
 }
 
 func (f *nacosREST) objectNamesDataId(ctx context.Context) string {
-	ns, _ := genericapirequest.NamespaceFrom(ctx)
-	return strings.Join([]string{f.dataIdPrefix, ns, namesItemKey}, dataIdSeparator)
+	return strings.Join([]string{f.dataIdPrefix, namesItemKey}, dataIdSeparator)
 }
 
 func (f *nacosREST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
