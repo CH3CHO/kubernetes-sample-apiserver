@@ -205,16 +205,18 @@ func (f *nacosREST) Create(
 	}
 
 	name := accessor.GetName()
-	var newList string
+	var newList, oldMd5 string
 	if len(list) != 0 {
 		if names := strings.Split(strings.ReplaceAll(list, newLineWindows, newLine), newLine); slices.Contains(names, name) {
 			return nil, apierrors.NewConflict(f.groupResource, name, ErrItemAlreadyExists)
 		}
 		newList = strings.Join([]string{list, name}, newLine)
+		oldMd5 = calculateMd5(list)
 	} else {
 		newList = name
+		oldMd5 = ""
 	}
-	if err := f.writeRaw(ns, namesDataId, newList, calculateMd5(list)); err != nil {
+	if err := f.writeRaw(ns, namesDataId, newList, oldMd5); err != nil {
 		return nil, err
 	}
 
@@ -226,7 +228,7 @@ func (f *nacosREST) Create(
 	}
 
 	accessor.SetCreationTimestamp(metav1.NewTime(time.Now()))
-	if err := f.write(f.codec, ns, dataId, calculateMd5(currentConfig), obj); err != nil {
+	if err := f.write(f.codec, ns, dataId, "", obj); err != nil {
 		return nil, err
 	}
 
@@ -292,7 +294,7 @@ func (f *nacosREST) Update(
 		return nil, false, apierrors.NewConflict(f.groupResource, name, nil)
 	}
 
-	if err := f.write(f.codec, ns, dataId, calculateMd5(oldConfig), updatedObj); err != nil {
+	if err := f.write(f.codec, ns, dataId, oldAccessor.GetResourceVersion(), updatedObj); err != nil {
 		return nil, false, err
 	}
 
@@ -441,6 +443,10 @@ func (f *nacosREST) read(decoder runtime.Decoder, group, dataId string, newFunc 
 	if err != nil {
 		return nil, "", err
 	}
+	accessor, err := meta.Accessor(obj)
+	if err == nil {
+		accessor.SetResourceVersion(calculateMd5(config))
+	}
 	return obj, config, nil
 }
 
@@ -449,25 +455,14 @@ func (f *nacosREST) write(encoder runtime.Encoder, group, dataId, oldMd5 string,
 	if err != nil {
 		return err
 	}
-	// Clear resource version before encoding
+	// No resource version saved into nacos
 	accessor.SetResourceVersion("")
 
 	buf := new(bytes.Buffer)
 	if err := encoder.Encode(obj, buf); err != nil {
 		return err
 	}
-
-	// Build new MD5 and set it into the object
 	content := buf.String()
-	accessor.SetResourceVersion(calculateMd5(content))
-
-	// Re-encode the object with the new resource version
-	buf = new(bytes.Buffer)
-	if err := encoder.Encode(obj, buf); err != nil {
-		return err
-	}
-	content = buf.String()
-
 	return f.writeRaw(group, dataId, content, oldMd5)
 }
 
