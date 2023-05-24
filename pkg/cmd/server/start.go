@@ -103,8 +103,10 @@ func getOpenAPIDefinitions(openapicommon.ReferenceCallback) map[string]openapico
 	return map[string]openapicommon.OpenAPIDefinition{
 		"k8s.io/api/core/v1.ConfigMap": {},
 		"k8s.io/api/core/v1.Secret":    {},
+		"k8s.io/api/core/v1.Service":   {},
 
-		"k8s.io/api/networking/v1.Ingress": {},
+		"k8s.io/api/networking/v1.Ingress":      {},
+		"k8s.io/api/networking/v1.IngressClass": {},
 
 		"github.com/alibaba/higress/client/pkg/apis/extensions/v1alpha1.WasmPlugin": {},
 		"github.com/alibaba/higress/client/pkg/apis/networking/v1.McpBridge":        {},

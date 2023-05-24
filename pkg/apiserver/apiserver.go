@@ -140,8 +140,9 @@ func (cfg *Config) Complete() CompletedConfig {
 	}
 
 	c.GenericConfig.Version = &version.Info{
-		Major: "1",
-		Minor: "0",
+		Major:      "1",
+		Minor:      "19",
+		GitVersion: "v1.19.0",
 	}
 
 	return CompletedConfig{&c}
@@ -180,6 +181,10 @@ func (c completedConfig) New() (*HigressServer, error) {
 				fields["type"] = string(secret.Type)
 				return labels, fields, err
 			})
+		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "service", "services",
+			func() runtime.Object { return &corev1.Service{} },
+			func() runtime.Object { return &corev1.ServiceList{} },
+			nil)
 		corev1ApiGroupInfo.VersionedResourcesStorageMap[corev1.SchemeGroupVersion.Version] = corev1Storages
 		if err := s.GenericAPIServer.InstallLegacyAPIGroup("/api", &corev1ApiGroupInfo); err != nil {
 			return nil, err
@@ -192,6 +197,10 @@ func (c completedConfig) New() (*HigressServer, error) {
 		appendStorage(networkingv1Storages, networkingv1.SchemeGroupVersion, true, "ingress", "ingresses",
 			func() runtime.Object { return &networkingv1.Ingress{} },
 			func() runtime.Object { return &networkingv1.IngressList{} },
+			nil)
+		appendStorage(networkingv1Storages, networkingv1.SchemeGroupVersion, true, "ingressclass", "ingressclasses",
+			func() runtime.Object { return &networkingv1.IngressClass{} },
+			func() runtime.Object { return &networkingv1.IngressClassList{} },
 			nil)
 		networkingv1ApiGroupInfo.VersionedResourcesStorageMap[networkingv1.SchemeGroupVersion.Version] = networkingv1Storages
 		if err := s.GenericAPIServer.InstallAPIGroup(&networkingv1ApiGroupInfo); err != nil {
