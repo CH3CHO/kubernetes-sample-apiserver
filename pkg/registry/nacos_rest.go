@@ -106,6 +106,8 @@ func (f *nacosREST) Destroy() {
 
 func (f *nacosREST) notifyWatchers(ev watch.Event) {
 	f.muWatchers.RLock()
+	accessor, _ := meta.Accessor(ev.Object)
+	fmt.Printf("event %s %s %s/%s count(watcher)=%d\n", ev.Type, ev.Object.GetObjectKind(), accessor.GetNamespace(), accessor.GetName(), len(f.watchers))
 	for _, w := range f.watchers {
 		w.ch <- ev
 	}
