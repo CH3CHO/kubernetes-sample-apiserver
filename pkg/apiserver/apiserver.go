@@ -23,6 +23,7 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v2/clients"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+	admregv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,6 +64,7 @@ var (
 				constant.WithLogDir("/tmp/nacos/log"),
 				constant.WithCacheDir("/tmp/nacos/cache"),
 				constant.WithLogLevel("debug"),
+				constant.WithDisableUseSnapShot(true),
 			),
 			ServerConfigs: []constant.ServerConfig{
 				{
@@ -79,6 +81,8 @@ var (
 func init() {
 	_ = corev1.AddToScheme(Scheme)
 	metav1.AddToGroupVersion(Scheme, corev1.SchemeGroupVersion)
+	_ = admregv1.AddToScheme(Scheme)
+	metav1.AddToGroupVersion(Scheme, admregv1.SchemeGroupVersion)
 	_ = networkingv1.AddToScheme(Scheme)
 	metav1.AddToGroupVersion(Scheme, networkingv1.SchemeGroupVersion)
 	_ = hiextensionsv1alpha1.AddToScheme(Scheme)
@@ -185,8 +189,41 @@ func (c completedConfig) New() (*HigressServer, error) {
 			func() runtime.Object { return &corev1.Service{} },
 			func() runtime.Object { return &corev1.ServiceList{} },
 			nil)
+		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "endpoints", "endpoints",
+			func() runtime.Object { return &corev1.Endpoints{} },
+			func() runtime.Object { return &corev1.EndpointsList{} },
+			nil)
+		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "pod", "pods",
+			func() runtime.Object { return &corev1.Pod{} },
+			func() runtime.Object { return &corev1.PodList{} },
+			nil)
+		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "node", "nodes",
+			func() runtime.Object { return &corev1.Node{} },
+			func() runtime.Object { return &corev1.NodeList{} },
+			nil)
+		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "namespace", "namespaces",
+			func() runtime.Object { return &corev1.Namespace{} },
+			func() runtime.Object { return &corev1.NamespaceList{} },
+			nil)
 		corev1ApiGroupInfo.VersionedResourcesStorageMap[corev1.SchemeGroupVersion.Version] = corev1Storages
 		if err := s.GenericAPIServer.InstallLegacyAPIGroup("/api", &corev1ApiGroupInfo); err != nil {
+			return nil, err
+		}
+	}
+
+	{
+		admRegv1ApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(admregv1.SchemeGroupVersion.Group, Scheme, metav1.ParameterCodec, Codecs)
+		admRegv1Storages := map[string]rest.Storage{}
+		appendStorage(admRegv1Storages, admregv1.SchemeGroupVersion, true, "mutatingwebhookconfiguration", "mutatingwebhookconfigurations",
+			func() runtime.Object { return &admregv1.MutatingWebhookConfiguration{} },
+			func() runtime.Object { return &admregv1.MutatingWebhookConfigurationList{} },
+			nil)
+		appendStorage(admRegv1Storages, admregv1.SchemeGroupVersion, true, "validatingwebhookconfiguration", "validatingwebhookconfigurations",
+			func() runtime.Object { return &admregv1.ValidatingWebhookConfiguration{} },
+			func() runtime.Object { return &admregv1.ValidatingWebhookConfigurationList{} },
+			nil)
+		admRegv1ApiGroupInfo.VersionedResourcesStorageMap[admregv1.SchemeGroupVersion.Version] = admRegv1Storages
+		if err := s.GenericAPIServer.InstallAPIGroup(&admRegv1ApiGroupInfo); err != nil {
 			return nil, err
 		}
 	}

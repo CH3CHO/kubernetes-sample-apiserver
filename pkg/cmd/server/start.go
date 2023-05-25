@@ -104,6 +104,13 @@ func getOpenAPIDefinitions(openapicommon.ReferenceCallback) map[string]openapico
 		"k8s.io/api/core/v1.ConfigMap": {},
 		"k8s.io/api/core/v1.Secret":    {},
 		"k8s.io/api/core/v1.Service":   {},
+		"k8s.io/api/core/v1.Endpoints": {},
+		"k8s.io/api/core/v1.Pod":       {},
+		"k8s.io/api/core/v1.Node":      {},
+		"k8s.io/api/core/v1.Namespace": {},
+
+		"k8s.io/api/admissionregistration/v1.MutatingWebhookConfiguration":   {},
+		"k8s.io/api/admissionregistration/v1.ValidatingWebhookConfiguration": {},
 
 		"k8s.io/api/networking/v1.Ingress":      {},
 		"k8s.io/api/networking/v1.IngressClass": {},

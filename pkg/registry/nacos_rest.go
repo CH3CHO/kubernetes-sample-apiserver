@@ -130,6 +130,9 @@ func (f *nacosREST) Get(
 	options *metav1.GetOptions,
 ) (runtime.Object, error) {
 	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	if ns == "" {
+		ns = "higress-system"
+	}
 	obj, _, err := f.read(f.codec, ns, f.objectDataId(ctx, name), f.newFunc)
 	if obj == nil && err == nil {
 		requestInfo, ok := genericapirequest.RequestInfoFrom(ctx)
@@ -138,8 +141,10 @@ func (f *nacosREST) Get(
 			groupResource.Group = requestInfo.APIGroup
 			groupResource.Resource = requestInfo.Resource
 		}
+		fmt.Printf("%s %s/%s not found\n", f.groupResource, ns, name)
 		return nil, apierrors.NewNotFound(groupResource, name)
 	}
+	fmt.Printf("%s %s/%s got\n", f.groupResource, ns, name)
 	return obj, err
 }
 
@@ -154,6 +159,9 @@ func (f *nacosREST) List(
 	}
 
 	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	if ns == "" {
+		ns = "higress-system"
+	}
 	list, err := f.configClient.GetConfig(vo.ConfigParam{
 		DataId: f.objectNamesDataId(ctx),
 		Group:  ns,
@@ -166,7 +174,7 @@ func (f *nacosREST) List(
 		predicate := f.buildListPredicate(options)
 		for _, name := range strings.Split(strings.ReplaceAll(list, newLineWindows, newLine), newLine) {
 			obj, err := f.Get(ctx, name, nil)
-			if err != nil {
+			if obj == nil || err != nil {
 				continue
 			}
 			if ok, err := predicate.Matches(obj); err == nil && ok {
@@ -174,6 +182,7 @@ func (f *nacosREST) List(
 			}
 		}
 	}
+	fmt.Printf("%s %s list count=%d\n", f.groupResource, ns, len(list))
 	return newListObj, nil
 }
 
@@ -195,6 +204,9 @@ func (f *nacosREST) Create(
 	}
 
 	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	if ns == "" {
+		ns = "higress-system"
+	}
 	namesDataId := f.objectNamesDataId(ctx)
 	list, err := f.configClient.GetConfig(vo.ConfigParam{
 		DataId: namesDataId,
@@ -250,6 +262,9 @@ func (f *nacosREST) Update(
 	options *metav1.UpdateOptions,
 ) (runtime.Object, bool, error) {
 	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	if ns == "" {
+		ns = "higress-system"
+	}
 	dataId := f.objectDataId(ctx, name)
 
 	isCreate := false
@@ -323,6 +338,9 @@ func (f *nacosREST) Delete(
 	}
 
 	ns, _ := genericapirequest.NamespaceFrom(ctx)
+	if ns == "" {
+		ns = "higress-system"
+	}
 	deleted, err := f.configClient.DeleteConfig(vo.ConfigParam{
 		DataId: dataId,
 		Group:  ns,
@@ -333,6 +351,8 @@ func (f *nacosREST) Delete(
 	if !deleted {
 		return nil, false, errors.New("delete config failed: " + dataId)
 	}
+
+	// TODO: Delete from list
 
 	f.notifyWatchers(watch.Event{
 		Type:   watch.Deleted,
@@ -438,6 +458,9 @@ func (f *nacosREST) read(decoder runtime.Decoder, group, dataId string, newFunc 
 	config, err := f.readRaw(group, dataId)
 	if err != nil {
 		return nil, "", err
+	}
+	if config == "" {
+		return nil, "", nil
 	}
 	obj, _, err := decoder.Decode([]byte(config), nil, newFunc())
 	if err != nil {
