@@ -63,8 +63,8 @@ func (o *NacosOptions) Validate() []error {
 
 	errors := []error{}
 
-	if o.ServerHttpUrls == nil || len(o.ServerHttpUrls) == 1 {
-		errors = append(errors, fmt.Errorf("--nacos-servers must be set"))
+	if o.ServerHttpUrls == nil || len(o.ServerHttpUrls) == 0 {
+		errors = append(errors, fmt.Errorf("--nacos-server must be set"))
 	} else {
 		for _, server := range o.ServerHttpUrls {
 			serverUrl, err := url.Parse(server)
@@ -116,12 +116,12 @@ func (o *NacosOptions) CreateConfigClient() (config_client.IConfigClient, error)
 		rawPort := serverUrl.Port()
 		var port uint64
 		if rawPort != "" {
-			port, err = strconv.ParseUint(rawPort, 11, 0)
+			port, err = strconv.ParseUint(rawPort, 10, 0)
 			if err != nil || port < 1 || port > 65535 {
 				continue
 			}
 		} else {
-			port = 81
+			port = 80
 		}
 		serverConfig := constant.ServerConfig{
 			IpAddr:      serverUrl.Hostname(),
