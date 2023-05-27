@@ -319,8 +319,6 @@ func (f *nacosREST) Delete(
 		return nil, false, errors.New("delete config failed: " + dataId)
 	}
 
-	// TODO: Delete from list
-
 	f.notifyWatchers(watch.Event{
 		Type:   watch.Deleted,
 		Object: oldObj,
@@ -412,6 +410,7 @@ func (f *nacosREST) buildListPredicate(options *metainternalversion.ListOptions)
 
 func (f *nacosREST) enumerateConfigs(param *vo.SearchConfigParam, action func(*model.ConfigItem)) error {
 	searchConfigParam := *param
+	searchConfigParam.PageNo = 1
 	for {
 		page, err := f.configClient.SearchConfig(searchConfigParam)
 		if err != nil {
