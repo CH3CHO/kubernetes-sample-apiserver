@@ -20,9 +20,7 @@ import (
 	"fmt"
 	hiextensionsv1alpha1 "github.com/alibaba/higress/client/pkg/apis/extensions/v1alpha1"
 	hinetworkingv1 "github.com/alibaba/higress/client/pkg/apis/networking/v1"
-	"github.com/nacos-group/nacos-sdk-go/v2/clients"
-	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
-	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+	"github.com/nacos-group/nacos-sdk-go/v2/clients/config_client"
 	admregv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -38,14 +36,12 @@ import (
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
+	"k8s.io/sample-apiserver/pkg/options"
 	"k8s.io/sample-apiserver/pkg/registry"
 )
 
 const (
-	rootPath         = "/tmp/k8s"
-	contentType      = runtime.ContentTypeYAML
-	extension        = ".yaml"
-	nacosNamespaceId = "higress"
+	contentType = runtime.ContentTypeYAML
 )
 
 var (
@@ -54,28 +50,6 @@ var (
 	// Codecs provides methods for retrieving codecs and serializers for specific
 	// versions and content types.
 	Codecs = serializer.NewCodecFactory(Scheme)
-
-	configClient, _ = clients.NewConfigClient(
-		vo.NacosClientParam{
-			ClientConfig: constant.NewClientConfig(
-				constant.WithNamespaceId(nacosNamespaceId), //当namespace是public时，此处填空字符串。
-				constant.WithTimeoutMs(5000),
-				constant.WithNotLoadCacheAtStart(true),
-				constant.WithLogDir("/tmp/nacos/log"),
-				constant.WithCacheDir("/tmp/nacos/cache"),
-				constant.WithLogLevel("debug"),
-				constant.WithDisableUseSnapShot(true),
-			),
-			ServerConfigs: []constant.ServerConfig{
-				{
-					IpAddr:      "127.0.0.1",
-					ContextPath: "/nacos",
-					Port:        8848,
-					Scheme:      "http",
-				},
-			},
-		},
-	)
 )
 
 func init() {
@@ -112,7 +86,7 @@ func init() {
 
 // ExtraConfig holds custom apiserver config
 type ExtraConfig struct {
-	// Place you custom config here.
+	NacosOptions *options.NacosOptions
 }
 
 // Config defines the config for the apiserver
@@ -143,6 +117,7 @@ func (cfg *Config) Complete() CompletedConfig {
 		&cfg.ExtraConfig,
 	}
 
+	// Set version to 1.19.0 so client can use networking.k8s.io/v1 instead of networking.k8s.io/v1beta1
 	c.GenericConfig.Version = &version.Info{
 		Major:      "1",
 		Minor:      "19",
@@ -163,14 +138,19 @@ func (c completedConfig) New() (*HigressServer, error) {
 		GenericAPIServer: genericServer,
 	}
 
+	configClient, err := c.ExtraConfig.NacosOptions.CreateConfigClient()
+	if err != nil {
+		return nil, err
+	}
+
 	{
 		corev1ApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(corev1.SchemeGroupVersion.Group, Scheme, metav1.ParameterCodec, Codecs)
 		corev1Storages := map[string]rest.Storage{}
-		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "configmap", "configmaps",
+		appendStorage(corev1Storages, configClient, corev1.SchemeGroupVersion, true, "configmap", "configmaps",
 			func() runtime.Object { return &corev1.ConfigMap{} },
 			func() runtime.Object { return &corev1.ConfigMapList{} },
 			nil)
-		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "secret", "secrets",
+		appendStorage(corev1Storages, configClient, corev1.SchemeGroupVersion, true, "secret", "secrets",
 			func() runtime.Object { return &corev1.Secret{} },
 			func() runtime.Object { return &corev1.SecretList{} },
 			func(obj runtime.Object) (labels.Set, fields.Set, error) {
@@ -185,23 +165,23 @@ func (c completedConfig) New() (*HigressServer, error) {
 				fields["type"] = string(secret.Type)
 				return labels, fields, err
 			})
-		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "service", "services",
+		appendStorage(corev1Storages, configClient, corev1.SchemeGroupVersion, true, "service", "services",
 			func() runtime.Object { return &corev1.Service{} },
 			func() runtime.Object { return &corev1.ServiceList{} },
 			nil)
-		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "endpoints", "endpoints",
+		appendStorage(corev1Storages, configClient, corev1.SchemeGroupVersion, true, "endpoints", "endpoints",
 			func() runtime.Object { return &corev1.Endpoints{} },
 			func() runtime.Object { return &corev1.EndpointsList{} },
 			nil)
-		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "pod", "pods",
+		appendStorage(corev1Storages, configClient, corev1.SchemeGroupVersion, true, "pod", "pods",
 			func() runtime.Object { return &corev1.Pod{} },
 			func() runtime.Object { return &corev1.PodList{} },
 			nil)
-		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "node", "nodes",
+		appendStorage(corev1Storages, configClient, corev1.SchemeGroupVersion, true, "node", "nodes",
 			func() runtime.Object { return &corev1.Node{} },
 			func() runtime.Object { return &corev1.NodeList{} },
 			nil)
-		appendStorage(corev1Storages, corev1.SchemeGroupVersion, true, "namespace", "namespaces",
+		appendStorage(corev1Storages, configClient, corev1.SchemeGroupVersion, true, "namespace", "namespaces",
 			func() runtime.Object { return &corev1.Namespace{} },
 			func() runtime.Object { return &corev1.NamespaceList{} },
 			nil)
@@ -214,11 +194,11 @@ func (c completedConfig) New() (*HigressServer, error) {
 	{
 		admRegv1ApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(admregv1.SchemeGroupVersion.Group, Scheme, metav1.ParameterCodec, Codecs)
 		admRegv1Storages := map[string]rest.Storage{}
-		appendStorage(admRegv1Storages, admregv1.SchemeGroupVersion, true, "mutatingwebhookconfiguration", "mutatingwebhookconfigurations",
+		appendStorage(admRegv1Storages, configClient, admregv1.SchemeGroupVersion, true, "mutatingwebhookconfiguration", "mutatingwebhookconfigurations",
 			func() runtime.Object { return &admregv1.MutatingWebhookConfiguration{} },
 			func() runtime.Object { return &admregv1.MutatingWebhookConfigurationList{} },
 			nil)
-		appendStorage(admRegv1Storages, admregv1.SchemeGroupVersion, true, "validatingwebhookconfiguration", "validatingwebhookconfigurations",
+		appendStorage(admRegv1Storages, configClient, admregv1.SchemeGroupVersion, true, "validatingwebhookconfiguration", "validatingwebhookconfigurations",
 			func() runtime.Object { return &admregv1.ValidatingWebhookConfiguration{} },
 			func() runtime.Object { return &admregv1.ValidatingWebhookConfigurationList{} },
 			nil)
@@ -231,11 +211,11 @@ func (c completedConfig) New() (*HigressServer, error) {
 	{
 		networkingv1ApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(networkingv1.SchemeGroupVersion.Group, Scheme, metav1.ParameterCodec, Codecs)
 		networkingv1Storages := map[string]rest.Storage{}
-		appendStorage(networkingv1Storages, networkingv1.SchemeGroupVersion, true, "ingress", "ingresses",
+		appendStorage(networkingv1Storages, configClient, networkingv1.SchemeGroupVersion, true, "ingress", "ingresses",
 			func() runtime.Object { return &networkingv1.Ingress{} },
 			func() runtime.Object { return &networkingv1.IngressList{} },
 			nil)
-		appendStorage(networkingv1Storages, networkingv1.SchemeGroupVersion, true, "ingressclass", "ingressclasses",
+		appendStorage(networkingv1Storages, configClient, networkingv1.SchemeGroupVersion, true, "ingressclass", "ingressclasses",
 			func() runtime.Object { return &networkingv1.IngressClass{} },
 			func() runtime.Object { return &networkingv1.IngressClassList{} },
 			nil)
@@ -248,7 +228,7 @@ func (c completedConfig) New() (*HigressServer, error) {
 	{
 		hiextensionv1alphaApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(hiextensionsv1alpha1.SchemeGroupVersion.Group, Scheme, metav1.ParameterCodec, Codecs)
 		hiextensionv1alphaStorages := map[string]rest.Storage{}
-		appendStorage(hiextensionv1alphaStorages, hiextensionsv1alpha1.SchemeGroupVersion, true, "wasmplugin", "wasmplugins",
+		appendStorage(hiextensionv1alphaStorages, configClient, hiextensionsv1alpha1.SchemeGroupVersion, true, "wasmplugin", "wasmplugins",
 			func() runtime.Object { return &hiextensionsv1alpha1.WasmPlugin{} },
 			func() runtime.Object { return &hiextensionsv1alpha1.WasmPluginList{} },
 			nil)
@@ -261,7 +241,7 @@ func (c completedConfig) New() (*HigressServer, error) {
 	{
 		hinetworkingv1ApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(hinetworkingv1.SchemeGroupVersion.Group, Scheme, metav1.ParameterCodec, Codecs)
 		hinetworkingv1Storages := map[string]rest.Storage{}
-		appendStorage(hinetworkingv1Storages, hinetworkingv1.SchemeGroupVersion, true, "mcpbridge", "mcpbridges",
+		appendStorage(hinetworkingv1Storages, configClient, hinetworkingv1.SchemeGroupVersion, true, "mcpbridge", "mcpbridges",
 			func() runtime.Object { return &hinetworkingv1.McpBridge{} },
 			func() runtime.Object { return &hinetworkingv1.McpBridgeList{} },
 			nil)
@@ -275,6 +255,7 @@ func (c completedConfig) New() (*HigressServer, error) {
 }
 
 func appendStorage(storages map[string]rest.Storage,
+	configClient config_client.IConfigClient,
 	groupVersion schema.GroupVersion,
 	isNamespaced bool,
 	singularName string,
@@ -294,6 +275,5 @@ func appendStorage(storages map[string]rest.Storage,
 		err = fmt.Errorf("unable to create REST storage for a resource due to %v, will die", err)
 		panic(err)
 	}
-	//storages[pluralName] = registry.NewFileREST(groupVersionResource, codec, rootPath, extension, isNamespaced, singularName, newFunc, newListFunc, attrFunc)
 	storages[pluralName] = registry.NewNacosREST(groupVersionResource, codec, configClient, isNamespaced, singularName, newFunc, newListFunc, attrFunc)
 }

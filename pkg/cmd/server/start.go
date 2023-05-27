@@ -18,26 +18,26 @@ package server
 
 import (
 	"fmt"
+	"github.com/spf13/cobra"
 	"io"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/endpoints/openapi"
 	"k8s.io/apiserver/pkg/features"
-	"k8s.io/client-go/informers"
-	openapicommon "k8s.io/kube-openapi/pkg/common"
-	"net"
-
-	"github.com/spf13/cobra"
-
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/informers"
+	openapicommon "k8s.io/kube-openapi/pkg/common"
 	"k8s.io/sample-apiserver/pkg/apiserver"
+	"k8s.io/sample-apiserver/pkg/options"
 	netutils "k8s.io/utils/net"
+	"net"
 )
 
 // HigressServerOptions contains state for master/api server
 type HigressServerOptions struct {
 	RecommendedOptions *genericoptions.RecommendedOptions
+	NacosOptions       *options.NacosOptions
 
 	SharedInformerFactory informers.SharedInformerFactory
 	StdOut                io.Writer
@@ -53,44 +53,18 @@ func NewHigressServerOptions(out, errOut io.Writer) *HigressServerOptions {
 			"",
 			apiserver.Codecs.LegacyCodec(),
 		),
-		StdOut: out,
-		StdErr: errOut,
+		NacosOptions: &options.NacosOptions{},
+		StdOut:       out,
+		StdErr:       errOut,
 	}
 	return o
-}
-
-// NewCommandStartHigressServer provides a CLI handler for 'start master' command
-// with a default HigressServerOptions.
-func NewCommandStartHigressServer(defaults *HigressServerOptions, stopCh <-chan struct{}) *cobra.Command {
-	o := *defaults
-	cmd := &cobra.Command{
-		Short: "Launch a Higress API server",
-		Long:  "Launch a Higress API server",
-		RunE: func(c *cobra.Command, args []string) error {
-			if err := o.Complete(); err != nil {
-				return err
-			}
-			if err := o.Validate(args); err != nil {
-				return err
-			}
-			if err := o.RunHigressServer(stopCh); err != nil {
-				return err
-			}
-			return nil
-		},
-	}
-
-	flags := cmd.Flags()
-	o.RecommendedOptions.AddFlags(flags)
-	utilfeature.DefaultMutableFeatureGate.AddFlag(flags)
-
-	return cmd
 }
 
 // Validate validates HigressServerOptions
 func (o HigressServerOptions) Validate(args []string) error {
 	errors := []error{}
 	errors = append(errors, validate(o.RecommendedOptions)...)
+	errors = append(errors, o.NacosOptions.Validate()...)
 	return utilerrors.NewAggregate(errors)
 }
 
@@ -130,6 +104,7 @@ func (o *HigressServerOptions) Config() (*apiserver.Config, error) {
 	serverConfig := genericapiserver.NewRecommendedConfig(apiserver.Codecs)
 
 	serverConfig.SkipOpenAPIInstallation = true
+
 	serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(getOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme))
 	serverConfig.OpenAPIConfig.Info.Title = "Higress"
 	serverConfig.OpenAPIConfig.Info.Version = "0.1"
@@ -140,19 +115,25 @@ func (o *HigressServerOptions) Config() (*apiserver.Config, error) {
 		serverConfig.OpenAPIV3Config.Info.Version = "0.1"
 	}
 
+	// TODO: AuthZ and AuthN are not ready yet.
+	o.RecommendedOptions.Authentication = nil
+	o.RecommendedOptions.Authorization = nil
+
 	if err := applyTo(o.RecommendedOptions, serverConfig); err != nil {
 		return nil, err
 	}
 
 	config := &apiserver.Config{
 		GenericConfig: serverConfig,
-		ExtraConfig:   apiserver.ExtraConfig{},
+		ExtraConfig: apiserver.ExtraConfig{
+			NacosOptions: o.NacosOptions,
+		},
 	}
 	return config, nil
 }
 
 // RunHigressServer starts a new HigressServer given HigressServerOptions
-func (o HigressServerOptions) RunHigressServer(stopCh <-chan struct{}) error {
+func (o *HigressServerOptions) RunHigressServer(stopCh <-chan struct{}) error {
 	config, err := o.Config()
 	if err != nil {
 		return err
@@ -164,8 +145,6 @@ func (o HigressServerOptions) RunHigressServer(stopCh <-chan struct{}) error {
 	}
 
 	server.GenericAPIServer.AddPostStartHookOrDie("start-higress-server-informers", func(context genericapiserver.PostStartHookContext) error {
-		//config.GenericConfig.SharedInformerFactory.Start(context.StopCh)
-		//o.SharedInformerFactory.Start(context.StopCh)
 		return nil
 	})
 
@@ -182,47 +161,58 @@ func applyTo(o *genericoptions.RecommendedOptions, config *genericapiserver.Reco
 	if err := o.SecureServing.ApplyTo(&config.Config.SecureServing, &config.Config.LoopbackClientConfig); err != nil {
 		return err
 	}
-	//if err := o.Authentication.ApplyTo(&config.Config.Authentication, config.SecureServing, config.OpenAPIConfig); err != nil {
-	//	return err
-	//}
-	//if err := o.Authorization.ApplyTo(&config.Config.Authorization); err != nil {
-	//	return err
-	//}
+	if err := o.Authentication.ApplyTo(&config.Config.Authentication, config.SecureServing, config.OpenAPIConfig); err != nil {
+		return err
+	}
+	if err := o.Authorization.ApplyTo(&config.Config.Authorization); err != nil {
+		return err
+	}
 	if err := o.Audit.ApplyTo(&config.Config); err != nil {
 		return err
 	}
 	if err := o.Features.ApplyTo(&config.Config); err != nil {
 		return err
 	}
-	//initializers, err := o.ExtraAdmissionInitializers(config)
-	//if err != nil {
-	//	return err
-	//}
-	//kubeClient, err := kubernetes.NewForConfig(config.ClientConfig)
-	//if err != nil {
-	//	return err
-	//}
-	//dynamicClient, err := dynamic.NewForConfig(config.ClientConfig)
-	//if err != nil {
-	//	return err
-	//}
-	//if err := o.Admission.ApplyTo(&config.Config, config.SharedInformerFactory, nil, nil, o.FeatureGate,
-	//	initializers...); err != nil {
-	//	return err
-	//}
 	return nil
 }
 
 func validate(o *genericoptions.RecommendedOptions) []error {
 	errors := []error{}
 	errors = append(errors, o.SecureServing.Validate()...)
-	//errors = append(errors, o.Authentication.Validate()...)
-	//errors = append(errors, o.Authorization.Validate()...)
+	errors = append(errors, o.Authentication.Validate()...)
+	errors = append(errors, o.Authorization.Validate()...)
 	errors = append(errors, o.Audit.Validate()...)
 	errors = append(errors, o.Features.Validate()...)
-	//errors = append(errors, o.Admission.Validate()...)
 	errors = append(errors, o.EgressSelector.Validate()...)
 	errors = append(errors, o.Traces.Validate()...)
-
 	return errors
+}
+
+// NewCommandStartHigressServer provides a CLI handler for 'start master' command
+// with a default HigressServerOptions.
+func NewCommandStartHigressServer(defaults *HigressServerOptions, stopCh <-chan struct{}) *cobra.Command {
+	o := *defaults
+	cmd := &cobra.Command{
+		Short: "Launch a Higress API server",
+		Long:  "Launch a Higress API server",
+		RunE: func(c *cobra.Command, args []string) error {
+			if err := o.Complete(); err != nil {
+				return err
+			}
+			if err := o.Validate(args); err != nil {
+				return err
+			}
+			if err := o.RunHigressServer(stopCh); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+
+	flags := cmd.Flags()
+	o.RecommendedOptions.AddFlags(flags)
+	o.NacosOptions.AddFlags(flags)
+	utilfeature.DefaultMutableFeatureGate.AddFlag(flags)
+
+	return cmd
 }
