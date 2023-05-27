@@ -5,7 +5,7 @@ module k8s.io/sample-apiserver
 go 1.20
 
 require (
-	github.com/alibaba/higress v0.7.4
+	github.com/alibaba/higress v1.0.0
 	github.com/nacos-group/nacos-sdk-go/v2 v2.2.2
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/pflag v1.0.5
@@ -101,7 +101,7 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	istio.io/api v0.0.0-20230516190108-40537bfae764 // indirect
+	istio.io/api v0.0.0-20211122181927-8da52c66ff23 // indirect
 	istio.io/gogo-genproto v0.0.0-20211115195057-0e34bdd2be67 // indirect
 	k8s.io/klog/v2 v2.100.1 // indirect
 	k8s.io/kms v0.0.0-20230512172557-898c6804e26a // indirect
